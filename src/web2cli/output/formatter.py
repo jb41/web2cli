@@ -4,9 +4,9 @@ import csv
 import io
 import json
 
+from rich import box
 from rich.console import Console
 from rich.table import Table
-from rich.text import Text
 
 
 def format_output(
@@ -44,7 +44,14 @@ def format_output(
 
 def _format_table(records: list[dict], fields: list[str], no_color: bool) -> str:
     """Rich table output."""
-    table = Table(show_header=True, header_style="bold", show_lines=False, pad_edge=False)
+    table_box = box.ASCII2 if no_color else box.HEAVY_HEAD
+    table = Table(
+        show_header=True,
+        header_style=None if no_color else "bold",
+        show_lines=False,
+        pad_edge=False,
+        box=table_box,
+    )
 
     for field in fields:
         table.add_column(field.upper())

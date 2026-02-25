@@ -35,7 +35,7 @@ class DynamicGroup(TyperGroup):
 
 app = typer.Typer(
     name="web2cli",
-    help="Every website is a command.",
+    help="Every website is a command.\n\nUsage: web2cli <domain> <command> [--args] [--format] [--fields] [--raw] [--verbose] [--no-color]",
     no_args_is_help=True,
     add_completion=False,
     cls=DynamicGroup,
@@ -169,6 +169,15 @@ def validate_command_args(
 # ---------------------------------------------------------------------------
 
 
+GLOBAL_FLAGS_HELP = """\
+[bold]Global flags:[/bold]
+  --format, -f       Output format: table, json, csv, plain
+  --fields           Comma-separated list of fields to display
+  --raw              Show raw HTTP response body
+  --verbose          Show request URL, params, and timing
+  --no-color         Disable colors and use ASCII table borders"""
+
+
 def print_adapter_info(adapter: AdapterSpec) -> None:
     aliases = ", ".join(adapter.meta.aliases)
     err.print(f"\n[bold]{adapter.meta.name}[/bold] — {adapter.meta.description}")
@@ -177,6 +186,8 @@ def print_adapter_info(adapter: AdapterSpec) -> None:
     err.print(f"\n[bold]Commands:[/bold]")
     for name, cmd in adapter.commands.items():
         err.print(f"  {name:15} {cmd.description}")
+    err.print()
+    err.print(GLOBAL_FLAGS_HELP)
     err.print()
 
 
@@ -194,6 +205,8 @@ def print_command_help(adapter: AdapterSpec, cmd: CommandSpec) -> None:
             desc = arg.description or ""
             enum_str = f" [{', '.join(arg.enum)}]" if arg.enum else ""
             err.print(f"  --{name:15} {arg.type:10} {desc}{enum_str}  ({req})")
+    err.print()
+    err.print(GLOBAL_FLAGS_HELP)
     err.print()
 
 
@@ -232,12 +245,19 @@ def run_command(
         err.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
 
+    # Help handling
+    help_requested = "--help" in ctx.args or command == "--help"
+    if command == "--help":
+        command = None
+
     # No command → show adapter info
-    if command is None or "--help" in ctx.args:
-        if command and "--help" in ctx.args and command in adapter.commands:
-            print_command_help(adapter, adapter.commands[command])
-        else:
-            print_adapter_info(adapter)
+    if command is None or (help_requested and command not in adapter.commands):
+        print_adapter_info(adapter)
+        raise typer.Exit(0)
+
+    # Command help
+    if help_requested and command in adapter.commands:
+        print_command_help(adapter, adapter.commands[command])
         raise typer.Exit(0)
 
     # Resolve command
