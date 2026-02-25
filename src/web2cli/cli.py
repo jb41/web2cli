@@ -171,7 +171,7 @@ def validate_command_args(
 
 GLOBAL_FLAGS_HELP = """\
 [bold]Global flags:[/bold]
-  --format, -f       Output format: table, json, csv, plain
+  --format, -f       Output format: table, json, csv, plain, md
   --fields           Comma-separated list of fields to display
   --raw              Show raw HTTP response body
   --verbose          Show request URL, params, and timing

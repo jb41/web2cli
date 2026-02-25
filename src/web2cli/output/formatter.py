@@ -1,4 +1,4 @@
-"""Output formatting: table, json, csv, plain."""
+"""Output formatting: table, json, csv, plain, md."""
 
 import csv
 import io
@@ -39,6 +39,8 @@ def format_output(
         return _format_csv(filtered, fields)
     if fmt == "plain":
         return _format_plain(filtered, fields)
+    if fmt == "md":
+        return _format_markdown(filtered, fields)
     return _format_table(filtered, fields, no_color)
 
 
@@ -82,6 +84,22 @@ def _format_csv(records: list[dict], fields: list[str]) -> str:
     writer.writeheader()
     writer.writerows(records)
     return buf.getvalue().rstrip()
+
+
+def _format_markdown(records: list[dict], fields: list[str]) -> str:
+    """Markdown table output."""
+    headers = [f.upper() for f in fields]
+    lines = ["| " + " | ".join(headers) + " |"]
+    lines.append("| " + " | ".join("---" for _ in fields) + " |")
+    for record in records:
+        cells = []
+        for field in fields:
+            val = record.get(field)
+            cell = str(val) if val is not None else ""
+            cell = cell.replace("|", "\\|")
+            cells.append(cell)
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
 
 
 def _format_plain(records: list[dict], fields: list[str]) -> str:
