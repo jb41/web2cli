@@ -1,0 +1,157 @@
+meta:
+  name: hn
+  domain: news.ycombinator.com
+  base_url: https://hacker-news.firebaseio.com/v0
+  version: 0.1.0
+  description: "Hacker News — top stories, new, search, items"
+  author: web2cli-core
+  transport: http
+  aliases:
+    - hn
+  default_headers:
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+# Tier 1: Public JSON — no auth needed
+
+commands:
+  top:
+    description: "Get top stories from Hacker News"
+
+    request:
+      method: GET
+      url: "/topstories.json"
+
+    args:
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 500
+        description: "Number of stories to show"
+
+    # HN top returns array of IDs — custom parser resolves them
+    response:
+      parser: custom
+      script: parsers/top.py
+
+    output:
+      default_fields: [rank, title, score, comments, url]
+      default_format: table
+      sort_by: rank
+      sort_order: asc
+
+  new:
+    description: "Get newest stories"
+
+    request:
+      method: GET
+      url: "/newstories.json"
+
+    args:
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 500
+
+    # Same fan-out pattern as top
+    response:
+      parser: custom
+      script: parsers/top.py
+
+    output:
+      default_fields: [rank, title, score, author, url]
+      default_format: table
+      sort_by: rank
+      sort_order: asc
+
+  item:
+    description: "Get a single HN item (story, comment, job)"
+
+    request:
+      method: GET
+      url: "/item/{{id}}.json"
+
+    args:
+      id:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "HN item ID"
+
+    response:
+      format: json
+      extract: "$"
+      fields:
+        - name: id
+          path: "$.id"
+        - name: title
+          path: "$.title"
+        - name: author
+          path: "$.by"
+        - name: score
+          path: "$.score"
+        - name: url
+          path: "$.url"
+        - name: text
+          path: "$.text"
+          transform: strip_html
+        - name: time
+          path: "$.time"
+          transform: timestamp
+        - name: comments
+          path: "$.descendants"
+
+    output:
+      default_fields: [title, author, score, url, time]
+      default_format: table
+
+  search:
+    description: "Search HN stories (via Algolia)"
+
+    # Algolia HN Search — different domain, use absolute URL
+    request:
+      method: GET
+      url: "https://hn.algolia.com/api/v1/search"
+      params:
+        query: "{{query}}"
+        tags: "story"
+        hitsPerPage: "{{limit}}"
+
+    args:
+      query:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Search query"
+      limit:
+        type: int
+        required: false
+        default: 20
+
+    response:
+      format: json
+      extract: "$.hits[*]"
+      fields:
+        - name: title
+          path: "$.title"
+        - name: author
+          path: "$.author"
+        - name: score
+          path: "$.points"
+        - name: comments
+          path: "$.num_comments"
+        - name: url
+          path: "$.url"
+        - name: date
+          path: "$.created_at"
+          transform: timestamp
+        - name: hn_url
+          path: "$.objectID"
+          template: "https://news.ycombinator.com/item?id={{value}}"
+
+    output:
+      default_fields: [title, score, comments, url]
+      default_format: table
+      sort_by: score
+      sort_order: desc
