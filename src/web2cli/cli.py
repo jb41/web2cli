@@ -368,8 +368,18 @@ def run_command(
 # ---------------------------------------------------------------------------
 
 
-adapters_app = typer.Typer(name="adapters", help="Manage adapters")
+adapters_app = typer.Typer(
+    name="adapters", help="Manage adapters",
+    invoke_without_command=True,
+)
 app.add_typer(adapters_app)
+
+
+@adapters_app.callback()
+def adapters_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 @adapters_app.command("list")
