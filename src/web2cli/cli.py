@@ -204,7 +204,8 @@ def print_command_help(adapter: AdapterSpec, cmd: CommandSpec) -> None:
             req = "[red]required[/red]" if arg.required else f"default: {arg.default}"
             desc = arg.description or ""
             enum_str = f" [{', '.join(arg.enum)}]" if arg.enum else ""
-            err.print(f"  --{name:15} {arg.type:10} {desc}{enum_str}  ({req})")
+            pipe_str = "  [dim]pipeable[/dim]" if "stdin" in arg.source else ""
+            err.print(f"  --{name:15} {arg.type:10} {desc}{enum_str}  ({req}){pipe_str}")
     err.print()
     err.print(GLOBAL_FLAGS_HELP)
     err.print()
