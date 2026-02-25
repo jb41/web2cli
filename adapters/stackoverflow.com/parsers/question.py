@@ -9,20 +9,7 @@ This parser extracts both and returns them as a flat list
 where type="question" or type="answer".
 """
 
-from html.parser import HTMLParser
-import re
-
-
-def _strip_html(html: str) -> str:
-    """Remove HTML tags, decode entities, normalize whitespace."""
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&quot;", '"', text)
-    text = re.sub(r"&#39;", "'", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+from selectolax.parser import HTMLParser
 
 
 def parse(status_code: int, headers: dict, body: str, args: dict) -> list[dict]:
@@ -32,68 +19,52 @@ def parse(status_code: int, headers: dict, body: str, args: dict) -> list[dict]:
     Returns list of records: first record is the question,
     followed by answers sorted by votes (descending).
     """
-    # We use basic string matching + regex here rather than a full HTML parser
-    # because we need specific elements from a complex page.
-    # In production, this would use selectolax or BeautifulSoup.
-
+    tree = HTMLParser(body)
     records = []
 
     # --- Extract question ---
-    title_match = re.search(r'<h1[^>]*itemprop="name"[^>]*>.*?<a[^>]*>(.+?)</a>', body, re.DOTALL)
-    title = _strip_html(title_match.group(1)) if title_match else "Unknown"
+    title_el = tree.css_first("#question-header h1 a")
+    title = title_el.text(strip=True) if title_el else "Unknown"
 
-    q_votes_match = re.search(r'itemprop="upvoteCount"[^>]*>(\d+)', body)
-    q_votes = int(q_votes_match.group(1)) if q_votes_match else 0
+    q_votes_el = tree.css_first("#question .js-vote-count")
+    q_votes = _parse_int(q_votes_el.text(strip=True)) if q_votes_el else 0
 
-    q_body_match = re.search(
-        r'<div[^>]*class="s-prose js-post-body"[^>]*itemprop="text"[^>]*>(.*?)</div>',
-        body, re.DOTALL
-    )
-    q_body = _strip_html(q_body_match.group(1))[:500] if q_body_match else ""
+    q_body_el = tree.css_first("#question .s-prose.js-post-body")
+    q_body = q_body_el.text(strip=True)[:500] if q_body_el else ""
 
-    q_author_match = re.search(
-        r'itemprop="author"[^>]*>.*?itemprop="name"[^>]*>([^<]+)',
-        body, re.DOTALL
-    )
-    q_author = q_author_match.group(1).strip() if q_author_match else "Unknown"
+    q_author_el = tree.css_first("#question .post-signature:last-child .user-details a")
+    q_author = q_author_el.text(strip=True) if q_author_el else "Unknown"
+
+    q_tags = [t.text(strip=True) for t in tree.css("#question .post-tag")]
 
     records.append({
         "type": "question",
         "title": title,
         "votes": q_votes,
         "author": q_author,
+        "tags": ", ".join(q_tags),
         "body": q_body,
     })
 
     # --- Extract answers ---
-    # Each answer lives in a <div id="answer-XXXXX">
-    answer_blocks = re.findall(
-        r'<div[^>]*id="answer-(\d+)"[^>]*>(.*?)</div>\s*</div>\s*</div>',
-        body, re.DOTALL
-    )
+    for answer_el in tree.css("#answers .answer"):
+        a_votes_el = answer_el.css_first(".js-vote-count")
+        a_votes = _parse_int(a_votes_el.text(strip=True)) if a_votes_el else 0
 
-    for answer_id, answer_html in answer_blocks:
-        a_votes_match = re.search(r'data-value="(-?\d+)"', answer_html)
-        a_votes = int(a_votes_match.group(1)) if a_votes_match else 0
+        a_body_el = answer_el.css_first(".s-prose.js-post-body")
+        a_body = a_body_el.text(strip=True)[:500] if a_body_el else ""
 
-        a_body_match = re.search(
-            r'<div[^>]*class="s-prose js-post-body"[^>]*>(.*?)</div>',
-            answer_html, re.DOTALL
-        )
-        a_body = _strip_html(a_body_match.group(1))[:500] if a_body_match else ""
+        a_author_el = answer_el.css_first(".post-signature:last-child .user-details a")
+        a_author = a_author_el.text(strip=True) if a_author_el else "Unknown"
 
-        a_author_match = re.search(
-            r'itemprop="name"[^>]*>([^<]+)', answer_html
-        )
-        a_author = a_author_match.group(1).strip() if a_author_match else "Unknown"
-
-        is_accepted = 'itemprop="acceptedAnswer"' in answer_html
+        is_accepted = "js-accepted-answer" in (answer_el.attributes.get("class", "") or "")
 
         records.append({
-            "type": "✓ answer" if is_accepted else "answer",
+            "type": "\u2713 answer" if is_accepted else "answer",
             "title": "",
             "votes": a_votes,
             "author": a_author,
+            "tags": "",
             "body": a_body,
         })
 
@@ -102,3 +73,16 @@ def parse(status_code: int, headers: dict, body: str, args: dict) -> list[dict]:
     answers = sorted(records[1:], key=lambda x: x["votes"], reverse=True)
 
     return [question] + answers
+
+
+def _parse_int(text: str) -> int:
+    """Parse vote count text like '13126' or '13k'."""
+    text = text.strip().lower().replace(",", "")
+    if text.endswith("k"):
+        return int(float(text[:-1]) * 1000)
+    if text.endswith("m"):
+        return int(float(text[:-1]) * 1000000)
+    try:
+        return int(text)
+    except ValueError:
+        return 0

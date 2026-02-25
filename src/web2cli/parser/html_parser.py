@@ -1,8 +1,13 @@
 """HTML response parser using selectolax."""
 
+import sys
+
 from selectolax.parser import HTMLParser
 
 from web2cli.parser.transforms import apply_transform
+
+# Page titles that indicate bot/CAPTCHA blocking
+_BLOCK_SIGNALS = ("human verification", "captcha", "access denied", "just a moment")
 
 
 def parse_html(body: str, response_spec: dict) -> list[dict]:
@@ -14,6 +19,16 @@ def parse_html(body: str, response_spec: dict) -> list[dict]:
     items = tree.css(extract_selector)
 
     if not items:
+        # Detect CAPTCHA / bot-blocking pages
+        title_el = tree.css_first("title")
+        if title_el:
+            title = title_el.text(strip=True).lower()
+            if any(s in title for s in _BLOCK_SIGNALS):
+                print(
+                    f"Blocked by site ({title_el.text(strip=True)}). "
+                    "Try again later or use `web2cli login` to add cookies.",
+                    file=sys.stderr,
+                )
         return []
 
     fields = response_spec.get("fields", [])

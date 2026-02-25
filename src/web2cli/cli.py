@@ -328,15 +328,16 @@ def run_command(
         err.print("[yellow]No results.[/yellow]")
         raise typer.Exit(0)
 
-    # --- Sort ---
+    # --- Sort (skip for custom parsers — they control their own order) ---
     output_spec = cmd_spec.output
-    sort_by = output_spec.get("sort_by")
-    sort_order = output_spec.get("sort_order", "desc")
-    if sort_by and records:
-        records.sort(
-            key=lambda r: r.get(sort_by, 0) or 0,
-            reverse=(sort_order == "desc"),
-        )
+    if response_spec.get("parser") != "custom":
+        sort_by = output_spec.get("sort_by")
+        sort_order = output_spec.get("sort_order", "desc")
+        if sort_by and records:
+            records.sort(
+                key=lambda r: r.get(sort_by, 0) or 0,
+                reverse=(sort_order == "desc"),
+            )
 
     # --- Limit ---
     limit = extra_globals.get("limit")
