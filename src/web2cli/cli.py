@@ -11,6 +11,11 @@ from web2cli import __version__
 from web2cli.adapter.loader import AdapterNotFound, load_adapter, list_adapters
 from web2cli.executor.builder import build_from_script, build_from_spec
 from web2cli.executor.http import HttpError, execute
+from web2cli.output.formatter import format_output
+from web2cli.parser.custom import parse_custom
+from web2cli.parser.html_parser import parse_html
+from web2cli.parser.json_parser import parse_json
+from web2cli.pipe import read_stdin
 from web2cli.types import AdapterSpec, CommandArg, CommandSpec
 
 err = Console(stderr=True)
@@ -245,19 +250,25 @@ def run_command(
 
     # Parse dynamic args from ctx.args
     command_args, extra_globals = parse_dynamic_args(ctx.args, cmd_spec.args)
-    validate_command_args(command_args, cmd_spec.args)
 
-    # Build global flags dict
-    global_flags = {
-        "format": output_format,
-        "fields": fields.split(",") if fields else None,
-        "raw": raw,
-        "verbose": verbose,
-        "no_color": no_color,
-    }
+    # Merge extra globals
     for k, v in extra_globals.items():
-        if k not in global_flags:
-            global_flags[k] = v
+        if k == "limit":
+            try:
+                v = int(v)
+            except (ValueError, TypeError):
+                pass
+
+    # --- Stdin injection ---
+    stdin_value = read_stdin()
+    if stdin_value:
+        for arg_name, arg_spec in cmd_spec.args.items():
+            if "stdin" in arg_spec.source and arg_name not in command_args:
+                command_args[arg_name] = stdin_value
+                break
+
+    # Re-validate after stdin injection
+    validate_command_args(command_args, cmd_spec.args)
 
     # --- Build request ---
     if cmd_spec.request.get("builder") == "custom":
@@ -269,7 +280,7 @@ def run_command(
 
     # --- Execute ---
     try:
-        status, headers, body = asyncio.run(
+        status, resp_headers, body = asyncio.run(
             execute(request, verbose=verbose)
         )
     except HttpError as e:
@@ -281,9 +292,53 @@ def run_command(
         print(body)
         raise typer.Exit(0)
 
-    # TODO: Steps 6-8 — parse response, format output
-    err.print(f"[dim]HTTP {status}, {len(body)} bytes[/dim]")
-    err.print(f"[dim]args={command_args}[/dim]")
+    # --- Parse response ---
+    response_spec = cmd_spec.response
+    if response_spec.get("parser") == "custom":
+        records = parse_custom(
+            response_spec["script"], adapter.adapter_dir,
+            status, resp_headers, body, command_args,
+        )
+    elif response_spec.get("format") == "html":
+        records = parse_html(body, response_spec)
+    else:
+        records = parse_json(body, response_spec)
+
+    if not records:
+        err.print("[yellow]No results.[/yellow]")
+        raise typer.Exit(0)
+
+    # --- Sort ---
+    output_spec = cmd_spec.output
+    sort_by = output_spec.get("sort_by")
+    sort_order = output_spec.get("sort_order", "desc")
+    if sort_by and records:
+        records.sort(
+            key=lambda r: r.get(sort_by, 0) or 0,
+            reverse=(sort_order == "desc"),
+        )
+
+    # --- Limit ---
+    limit = extra_globals.get("limit")
+    if limit is None:
+        # Use command arg limit for post-processing cap too
+        limit = command_args.get("limit")
+    if limit:
+        try:
+            records = records[:int(limit)]
+        except (ValueError, TypeError):
+            pass
+
+    # --- Format and output ---
+    fmt = output_format or output_spec.get("default_format", "table")
+    show_fields = (
+        fields.split(",") if fields
+        else output_spec.get("default_fields")
+    )
+
+    result = format_output(records, fmt, show_fields, no_color)
+    if result:
+        print(result)
 
 
 # ---------------------------------------------------------------------------
