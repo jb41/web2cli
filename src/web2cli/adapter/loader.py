@@ -119,6 +119,7 @@ def load_adapter(domain_or_alias: str) -> AdapterSpec:
         raw = yaml.safe_load(f)
 
     spec = _parse_adapter(raw)
+    spec.adapter_dir = adapter_dir
     validate_adapter(spec, adapter_dir)
     return spec
 

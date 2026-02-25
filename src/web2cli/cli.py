@@ -1,5 +1,6 @@
 """CLI entry point for web2cli."""
 
+import asyncio
 import sys
 
 import typer
@@ -8,6 +9,8 @@ from typer.core import TyperGroup
 
 from web2cli import __version__
 from web2cli.adapter.loader import AdapterNotFound, load_adapter, list_adapters
+from web2cli.executor.builder import build_from_script, build_from_spec
+from web2cli.executor.http import HttpError, execute
 from web2cli.types import AdapterSpec, CommandArg, CommandSpec
 
 err = Console(stderr=True)
@@ -256,10 +259,31 @@ def run_command(
         if k not in global_flags:
             global_flags[k] = v
 
-    # TODO: Steps 4-8 will wire the actual execution pipeline here
-    err.print(f"[dim]adapter={adapter.meta.domain} command={command}[/dim]")
+    # --- Build request ---
+    if cmd_spec.request.get("builder") == "custom":
+        request = build_from_script(
+            cmd_spec.request["script"], adapter.adapter_dir, command_args, None
+        )
+    else:
+        request = build_from_spec(cmd_spec, command_args, None, adapter.meta)
+
+    # --- Execute ---
+    try:
+        status, headers, body = asyncio.run(
+            execute(request, verbose=verbose)
+        )
+    except HttpError as e:
+        err.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    # --raw: dump raw response and exit
+    if raw:
+        print(body)
+        raise typer.Exit(0)
+
+    # TODO: Steps 6-8 — parse response, format output
+    err.print(f"[dim]HTTP {status}, {len(body)} bytes[/dim]")
     err.print(f"[dim]args={command_args}[/dim]")
-    err.print(f"[dim]global_flags={global_flags}[/dim]")
 
 
 # ---------------------------------------------------------------------------

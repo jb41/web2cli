@@ -1,6 +1,7 @@
 """Core types for web2cli."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -56,6 +57,7 @@ class AdapterSpec:
     meta: AdapterMeta
     auth: dict | None  # raw YAML auth section, None if no auth
     commands: dict[str, CommandSpec]
+    adapter_dir: Path | None = None  # path to adapter directory on disk
 
 
 @dataclass
