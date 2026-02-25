@@ -1,0 +1,27 @@
+[project]
+name = "web2cli"
+version = "0.1.0"
+description = "Every website is a command"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.24.0",
+    "httpx>=0.28.0",
+    "pyyaml>=6.0",
+    "rich>=14.0",
+    "selectolax>=0.3.0",
+    "jmespath>=1.1.0",
+    "cryptography>=46.0",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+web2cli = "web2cli.cli:app"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

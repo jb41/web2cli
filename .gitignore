@@ -1,1 +1,7 @@
 .claude
+.venv
+*.egg-info/
+__pycache__/
+
+SCRATCHPAD.md
+# spec-docs
