@@ -304,15 +304,15 @@ def run_command(
     # --- Load session (if adapter supports auth) ---
     session = get_session(adapter.meta.domain, adapter.auth)
 
-    # --- Build request ---
-    if cmd_spec.request.get("builder") == "custom":
-        request = build_from_script(
-            cmd_spec.request["script"], adapter.adapter_dir, command_args, session
-        )
-    else:
-        request = build_from_spec(cmd_spec, command_args, session, adapter.meta)
+    # --- Build + Execute (with retry for custom builders) ---
+    def _build():
+        if cmd_spec.request.get("builder") == "custom":
+            return build_from_script(
+                cmd_spec.request["script"], adapter.adapter_dir, command_args, session
+            )
+        return build_from_spec(cmd_spec, command_args, session, adapter.meta)
 
-    # --- Execute ---
+    request = _build()
     try:
         status, resp_headers, body = asyncio.run(
             execute(request, verbose=verbose, impersonate=adapter.meta.impersonate)
@@ -320,6 +320,20 @@ def run_command(
     except HttpError as e:
         err.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
+
+    # Retry once for custom builders on client/server errors
+    if status >= 400 and cmd_spec.request.get("builder") == "custom":
+        if verbose:
+            err.print(f"[yellow]Got {status}, retrying with _retry=True...[/yellow]")
+        command_args["_retry"] = True
+        request = _build()
+        try:
+            status, resp_headers, body = asyncio.run(
+                execute(request, verbose=verbose, impersonate=adapter.meta.impersonate)
+            )
+        except HttpError as e:
+            err.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
 
     # --raw: dump raw response and exit
     if raw:
