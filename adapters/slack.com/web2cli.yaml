@@ -1,0 +1,171 @@
+meta:
+  name: slack
+  domain: slack.com
+  base_url: https://slack.com/api
+  version: 0.1.0
+  description: "Slack — channels, messages, DMs"
+  author: web2cli-core
+  transport: http
+  impersonate: chrome
+  aliases:
+    - slack
+  default_headers:
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    Accept: "application/json"
+
+auth:
+  methods:
+    - type: cookies
+      keys: [d]
+
+commands:
+  me:
+    description: "Show current user and workspace info"
+
+    request:
+      builder: custom
+      script: builders/me.py
+
+    response:
+      parser: custom
+      script: parsers/me.py
+
+    output:
+      default_fields: [user, team, url]
+      default_format: table
+
+  channels:
+    description: "List channels in workspace"
+
+    request:
+      builder: custom
+      script: builders/channels.py
+
+    response:
+      parser: custom
+      script: parsers/channels.py
+
+    output:
+      default_fields: [name, topic, num_members]
+      default_format: table
+
+  messages:
+    description: "Get messages from a channel"
+
+    request:
+      builder: custom
+      script: builders/messages.py
+
+    args:
+      channel:
+        type: string
+        required: true
+        description: "Channel name"
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 200
+        description: "Number of messages to fetch"
+
+    response:
+      parser: custom
+      script: parsers/messages.py
+
+    output:
+      default_fields: [author, content, timestamp, reactions]
+      default_format: table
+
+  send:
+    description: "Send a message to a channel"
+
+    request:
+      builder: custom
+      script: builders/send.py
+
+    args:
+      channel:
+        type: string
+        required: true
+        description: "Channel name"
+      message:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Message content"
+
+    response:
+      parser: custom
+      script: parsers/send.py
+
+    output:
+      default_fields: [ok, channel, timestamp]
+      default_format: table
+
+  dm:
+    description: "List DM conversations"
+
+    request:
+      builder: custom
+      script: builders/dm.py
+
+    response:
+      parser: custom
+      script: parsers/dm.py
+
+    output:
+      default_fields: [user, user_id]
+      default_format: table
+
+  dm-messages:
+    description: "Get messages from a DM conversation"
+
+    request:
+      builder: custom
+      script: builders/dm_messages.py
+
+    args:
+      user:
+        type: string
+        required: true
+        description: "User display name"
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 200
+        description: "Number of messages to fetch"
+
+    response:
+      parser: custom
+      script: parsers/messages.py
+
+    output:
+      default_fields: [author, content, timestamp, reactions]
+      default_format: table
+
+  dm-send:
+    description: "Send a DM to a user"
+
+    request:
+      builder: custom
+      script: builders/dm_send.py
+
+    args:
+      user:
+        type: string
+        required: true
+        description: "User display name"
+      message:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Message content"
+
+    response:
+      parser: custom
+      script: parsers/send.py
+
+    output:
+      default_fields: [ok, channel, timestamp]
+      default_format: table

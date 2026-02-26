@@ -45,7 +45,10 @@ def create_session(
     """Create and persist a session."""
     now = datetime.now(timezone.utc).isoformat()
 
-    if cookies:
+    if cookies and token:
+        auth_type = "cookies+token"
+        data = {"cookies": cookies, "token": token}
+    elif cookies:
         auth_type = "cookies"
         data = {"cookies": cookies}
     elif token:
