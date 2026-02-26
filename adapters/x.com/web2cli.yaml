@@ -64,3 +64,35 @@ commands:
     output:
       default_fields: [handle, name, bio, followers, following, tweets, joined]
       default_format: table
+
+  search:
+    description: "Search tweets"
+
+    request:
+      builder: custom
+      script: builders/search.py
+
+    args:
+      query:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Search query (e.g. 'python' or 'from:elonmusk')"
+      limit:
+        type: integer
+        required: false
+        default: 20
+        description: "Number of results (default 20)"
+      product:
+        type: string
+        required: false
+        default: Latest
+        description: "Search tab: Latest, Top, People, Media"
+
+    response:
+      parser: custom
+      script: parsers/search.py
+
+    output:
+      default_fields: [author, text, date, likes, retweets, views]
+      default_format: table

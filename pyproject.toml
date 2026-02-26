@@ -12,6 +12,8 @@ dependencies = [
     "jmespath>=1.1.0",
     "cryptography>=46.0",
     "curl_cffi>=0.7.0",
+    "beautifulsoup4>=4.12",
+    "XClientTransaction>=1.0",
 ]
 
 [project.optional-dependencies]
