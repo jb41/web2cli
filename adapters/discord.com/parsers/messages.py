@@ -29,15 +29,9 @@ def _format_reactions(reactions: list | None) -> str:
     return " ".join(parts)
 
 
-def _truncate(text: str, max_len: int = 120) -> str:
-    """Truncate long text for table display."""
-    if not text:
-        return ""
-    # Collapse newlines for table view
-    text = text.replace("\n", " ↵ ")
-    if len(text) > max_len:
-        return text[:max_len - 1] + "…"
-    return text
+def _format_attachment_urls(attachments: list) -> str:
+    """Extract URLs from attachments."""
+    return " ".join(a["url"] for a in attachments if a.get("url"))
 
 
 def parse(status_code: int, headers: dict, body: str, args: dict) -> list[dict]:
@@ -47,19 +41,28 @@ def parse(status_code: int, headers: dict, body: str, args: dict) -> list[dict]:
     if not isinstance(messages, list):
         return []
 
+    show_attachments = not args.get("no_attachments", False)
+
     records = []
     for msg in messages:
         author_info = msg.get("author", {})
         author = author_info.get("global_name") or author_info.get("username", "?")
 
+        content = msg.get("content", "")
+
+        # Append attachment URLs to content
+        if show_attachments and msg.get("attachments"):
+            urls = _format_attachment_urls(msg["attachments"])
+            if urls:
+                content = f"{content} {urls}" if content else urls
+
         records.append({
             "author": author,
-            "content": _truncate(msg.get("content", "")),
+            "content": content,
             "timestamp": _format_timestamp(msg.get("timestamp", "")),
             "reactions": _format_reactions(msg.get("reactions")),
             "type": msg.get("type", 0),
             "id": msg.get("id", ""),
-            "attachments": len(msg.get("attachments", [])),
             "embeds": len(msg.get("embeds", [])),
         })
 

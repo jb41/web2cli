@@ -130,6 +130,10 @@ commands:
         default: 20
         max: 100
         description: "Number of messages to fetch"
+      no_attachments:
+        type: flag
+        required: false
+        description: "Hide attachment URLs from content"
 
     response:
       parser: custom
