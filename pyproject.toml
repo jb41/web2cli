@@ -11,6 +11,7 @@ dependencies = [
     "selectolax>=0.3.0",
     "jmespath>=1.1.0",
     "cryptography>=46.0",
+    "curl_cffi>=0.7.0",
 ]
 
 [project.optional-dependencies]

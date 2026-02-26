@@ -92,6 +92,7 @@ def _parse_meta(raw: dict) -> AdapterMeta:
         description=raw.get("description", ""),
         author=raw.get("author", ""),
         transport=raw.get("transport", "http"),
+        impersonate=raw.get("impersonate"),
         aliases=raw.get("aliases", []),
         default_headers=raw.get("default_headers", {}),
     )

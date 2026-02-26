@@ -315,7 +315,7 @@ def run_command(
     # --- Execute ---
     try:
         status, resp_headers, body = asyncio.run(
-            execute(request, verbose=verbose)
+            execute(request, verbose=verbose, impersonate=adapter.meta.impersonate)
         )
     except HttpError as e:
         err.print(f"[red]{e}[/red]")

@@ -25,6 +25,7 @@ class AdapterMeta:
     description: str
     author: str
     transport: str = "http"
+    impersonate: str | None = None
     aliases: list[str] = field(default_factory=list)
     default_headers: dict[str, str] = field(default_factory=dict)
 

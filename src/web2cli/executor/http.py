@@ -1,4 +1,4 @@
-"""HTTP request execution via httpx."""
+"""HTTP request execution via httpx (default) or curl_cffi (TLS impersonation)."""
 
 import sys
 import time
@@ -14,17 +14,8 @@ class HttpError(Exception):
         super().__init__(message)
 
 
-async def execute(
-    request: Request, verbose: bool = False
-) -> tuple[int, dict, str]:
-    """Execute HTTP request. Returns (status_code, headers, body)."""
-    if verbose:
-        sys.stderr.write(f"→ {request.method} {request.url}\n")
-        if request.params:
-            sys.stderr.write(f"  params: {request.params}\n")
-
-    start = time.monotonic()
-
+async def _execute_httpx(request: Request) -> tuple[int, dict, str]:
+    """Execute via httpx (standard path)."""
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.request(
@@ -41,15 +32,60 @@ async def execute(
     except httpx.TimeoutException:
         raise HttpError(0, f"Request timed out: {request.url}")
 
+    return response.status_code, dict(response.headers), response.text
+
+
+async def _execute_impersonate(
+    request: Request, impersonate: str
+) -> tuple[int, dict, str]:
+    """Execute via curl_cffi with TLS impersonation."""
+    from curl_cffi.requests import AsyncSession
+
+    try:
+        async with AsyncSession(impersonate=impersonate) as session:
+            response = await session.request(
+                method=request.method,
+                url=request.url,
+                params=request.params or None,
+                headers=request.headers,
+                cookies=request.cookies,
+                data=request.body if isinstance(request.body, str) else None,
+                json=request.body if isinstance(request.body, dict) else None,
+                allow_redirects=True,
+            )
+    except ConnectionError:
+        raise HttpError(0, f"Connection failed: could not reach {request.url}")
+    except TimeoutError:
+        raise HttpError(0, f"Request timed out: {request.url}")
+
+    return response.status_code, dict(response.headers), response.text
+
+
+async def execute(
+    request: Request, verbose: bool = False, impersonate: str | None = None
+) -> tuple[int, dict, str]:
+    """Execute HTTP request. Returns (status_code, headers, body)."""
+    if verbose:
+        sys.stderr.write(f"→ {request.method} {request.url}\n")
+        if request.params:
+            sys.stderr.write(f"  params: {request.params}\n")
+        if impersonate:
+            sys.stderr.write(f"  impersonate: {impersonate}\n")
+
+    start = time.monotonic()
+
+    if impersonate:
+        status, headers, body = await _execute_impersonate(request, impersonate)
+    else:
+        status, headers, body = await _execute_httpx(request)
+
     elapsed = time.monotonic() - start
 
     if verbose:
-        sys.stderr.write(f"← {response.status_code} ({elapsed:.2f}s)\n")
-
-    status = response.status_code
+        sys.stderr.write(f"← {status} ({elapsed:.2f}s)\n")
 
     if status == 429:
-        retry = response.headers.get("Retry-After", "?")
+        retry = headers.get("Retry-After", "?")
         raise HttpError(429, f"Rate limited. Try again in {retry} seconds.")
     if status == 403:
         raise HttpError(
@@ -59,4 +95,4 @@ async def execute(
     if status >= 500:
         raise HttpError(status, f"Server error ({status})")
 
-    return status, dict(response.headers), response.text
+    return status, headers, body
