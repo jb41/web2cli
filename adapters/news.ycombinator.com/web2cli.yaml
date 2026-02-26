@@ -3,13 +3,19 @@ meta:
   domain: news.ycombinator.com
   base_url: https://hacker-news.firebaseio.com/v0
   version: 0.1.0
-  description: "Hacker News — top stories, new, search, items"
+  description: "Hacker News — top stories, new, search, items, saved, upvoted"
   author: web2cli-core
   transport: http
   aliases:
     - hn
   default_headers:
     User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+auth:
+  methods:
+    - type: cookies
+      keys: ["user"]
+      env_var: WEB2CLI_HN_COOKIES
 
 # Tier 1: Public JSON — no auth needed
 
@@ -155,3 +161,68 @@ commands:
       default_format: table
       sort_by: score
       sort_order: desc
+
+  # Tier 2: Auth-required HTML pages
+
+  saved:
+    description: "Get saved stories (requires login)"
+
+    request:
+      method: GET
+      url: "https://news.ycombinator.com/favorites?id={{username}}"
+
+    args:
+      username:
+        type: string
+        required: true
+        description: "HN username"
+
+    response:
+      parser: custom
+      script: parsers/stories_html.py
+
+    output:
+      default_fields: [title, score, author, comments, url]
+      default_format: table
+
+  upvoted:
+    description: "Get upvoted stories (requires login)"
+
+    request:
+      method: GET
+      url: "https://news.ycombinator.com/upvoted?id={{username}}"
+
+    args:
+      username:
+        type: string
+        required: true
+        description: "HN username"
+
+    response:
+      parser: custom
+      script: parsers/stories_html.py
+
+    output:
+      default_fields: [title, score, author, comments, url]
+      default_format: table
+
+  submissions:
+    description: "Get a user's submissions"
+
+    request:
+      method: GET
+      url: "https://news.ycombinator.com/submitted?id={{username}}"
+
+    args:
+      username:
+        type: string
+        required: true
+        description: "HN username"
+
+    response:
+      parser: custom
+      script: parsers/stories_html.py
+
+    output:
+      default_fields: [title, score, comments, age, url]
+      default_format: table
