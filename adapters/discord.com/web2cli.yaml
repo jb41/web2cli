@@ -143,6 +143,36 @@ commands:
       default_fields: [author, content, timestamp, reactions]
       default_format: table
 
+  send:
+    description: "Send a message to a channel"
+
+    request:
+      builder: custom
+      script: builders/send.py
+
+    args:
+      server:
+        type: string
+        required: true
+        description: "Server name"
+      channel:
+        type: string
+        required: true
+        description: "Channel name"
+      message:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Message content"
+
+    response:
+      parser: custom
+      script: parsers/send.py
+
+    output:
+      default_fields: [id, content, timestamp]
+      default_format: table
+
   dm:
     description: "List DM conversations"
 
@@ -187,4 +217,30 @@ commands:
 
     output:
       default_fields: [author, content, timestamp, reactions]
+      default_format: table
+
+  dm-send:
+    description: "Send a DM to a user"
+
+    request:
+      builder: custom
+      script: builders/dm_send.py
+
+    args:
+      user:
+        type: string
+        required: true
+        description: "User display name"
+      message:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Message content"
+
+    response:
+      parser: custom
+      script: parsers/send.py
+
+    output:
+      default_fields: [id, content, timestamp]
       default_format: table
