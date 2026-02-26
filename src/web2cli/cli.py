@@ -183,7 +183,8 @@ GLOBAL_FLAGS_HELP = """\
   --fields           Comma-separated list of fields to display
   --raw              Show raw HTTP response body
   --verbose          Show request URL, params, and timing
-  --no-color         Disable colors and use ASCII table borders"""
+  --no-color         Disable colors and use ASCII table borders
+  --no-header        Omit header row (csv only)"""
 
 
 def print_adapter_info(adapter: AdapterSpec) -> None:
@@ -245,6 +246,7 @@ def run_command(
     raw: bool = typer.Option(False, "--raw", help="Show raw HTTP response"),
     verbose: bool = typer.Option(False, "--verbose", help="Show request details"),
     no_color: bool = typer.Option(False, "--no-color", help="Disable colored output"),
+    no_header: bool = typer.Option(False, "--no-header", help="Omit header row (csv)"),
 ) -> None:
     """Execute an adapter command."""
     # Load adapter
@@ -369,7 +371,7 @@ def run_command(
         else output_spec.get("default_fields")
     )
 
-    result = format_output(records, fmt, show_fields, no_color)
+    result = format_output(records, fmt, show_fields, no_color, no_header=no_header)
     if result:
         print(result)
 

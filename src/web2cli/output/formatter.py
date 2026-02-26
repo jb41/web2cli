@@ -14,6 +14,7 @@ def format_output(
     fmt: str = "table",
     fields: list[str] | None = None,
     no_color: bool = False,
+    no_header: bool = False,
 ) -> str:
     """Format records for stdout.
 
@@ -22,6 +23,7 @@ def format_output(
         fmt: Output format — table, json, csv, plain.
         fields: Which fields to include (None = all).
         no_color: Disable colored output.
+        no_header: Omit header row (csv only).
     """
     if not records:
         return ""
@@ -36,7 +38,7 @@ def format_output(
     if fmt == "json":
         return _format_json(filtered)
     if fmt == "csv":
-        return _format_csv(filtered, fields)
+        return _format_csv(filtered, fields, no_header=no_header)
     if fmt == "plain":
         return _format_plain(filtered, fields)
     if fmt == "md":
@@ -77,11 +79,12 @@ def _format_json(records: list[dict]) -> str:
     return json.dumps(records, indent=2, ensure_ascii=False)
 
 
-def _format_csv(records: list[dict], fields: list[str]) -> str:
+def _format_csv(records: list[dict], fields: list[str], no_header: bool = False) -> str:
     """CSV output."""
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
+    if not no_header:
+        writer.writeheader()
     writer.writerows(records)
     return buf.getvalue().rstrip()
 
