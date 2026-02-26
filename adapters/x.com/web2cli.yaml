@@ -3,7 +3,7 @@ meta:
   domain: x.com
   base_url: https://x.com/i/api/graphql
   version: 0.1.0
-  description: "X (Twitter) — tweets, profiles, search"
+  description: "X (Twitter) — tweets, profiles"
   author: web2cli-core
   transport: http
   impersonate: chrome
@@ -41,4 +41,26 @@ commands:
 
     output:
       default_fields: [author, text, date, retweets, likes, replies, views]
+      default_format: table
+
+  profile:
+    description: "Get user profile info"
+
+    request:
+      builder: custom
+      script: builders/profile.py
+
+    args:
+      user:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Username (e.g. michaloblak or @michaloblak)"
+
+    response:
+      parser: custom
+      script: parsers/profile.py
+
+    output:
+      default_fields: [handle, name, bio, followers, following, tweets, joined]
       default_format: table
