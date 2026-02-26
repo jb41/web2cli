@@ -19,6 +19,8 @@ def _jmespath_expr(path: str) -> str:
         return "@"
     if path.startswith("$."):
         return path[2:]
+    if path.startswith("$["):
+        return path[1:]
     return path
 
 

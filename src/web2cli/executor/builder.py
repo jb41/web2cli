@@ -65,6 +65,10 @@ def build_from_spec(
     if session and session.data.get("cookies"):
         cookies = dict(session.data["cookies"])
 
+    # Token auth → Authorization header
+    if session and session.data.get("token"):
+        headers["Authorization"] = session.data["token"]
+
     # Body
     body = None
     content_type = None

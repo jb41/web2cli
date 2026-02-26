@@ -1,0 +1,140 @@
+meta:
+  name: discord
+  domain: discord.com
+  base_url: https://discord.com/api/v9
+  version: 0.1.0
+  description: "Discord — servers, channels, messages"
+  author: web2cli-core
+  transport: http
+  impersonate: chrome
+  aliases:
+    - dc
+    - discord
+  default_headers:
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    Accept: "application/json"
+
+auth:
+  methods:
+    - type: token
+      env_var: WEB2CLI_DISCORD_TOKEN
+
+commands:
+  me:
+    description: "Show current user info"
+
+    request:
+      method: GET
+      url: "/users/@me"
+
+    response:
+      format: json
+      extract: "$"
+      fields:
+        - name: id
+          path: "$.id"
+        - name: username
+          path: "$.username"
+        - name: global_name
+          path: "$.global_name"
+        - name: email
+          path: "$.email"
+        - name: phone
+          path: "$.phone"
+        - name: mfa
+          path: "$.mfa_enabled"
+
+    output:
+      default_fields: [id, username, global_name, email]
+      default_format: table
+
+  servers:
+    description: "List your Discord servers (guilds)"
+
+    request:
+      method: GET
+      url: "/users/@me/guilds"
+
+    response:
+      format: json
+      extract: "$[*]"
+      fields:
+        - name: id
+          path: "$.id"
+        - name: name
+          path: "$.name"
+        - name: owner
+          path: "$.owner"
+        - name: permissions
+          path: "$.permissions"
+
+    output:
+      default_fields: [id, name, owner]
+      default_format: table
+
+  channels:
+    description: "List channels in a server"
+
+    request:
+      builder: custom
+      script: builders/channels.py
+
+    args:
+      server:
+        type: string
+        required: true
+        description: "Server name"
+
+    response:
+      format: json
+      extract: "$[*]"
+      fields:
+        - name: id
+          path: "$.id"
+        - name: name
+          path: "$.name"
+        - name: type
+          path: "$.type"
+        - name: topic
+          path: "$.topic"
+        - name: position
+          path: "$.position"
+        - name: parent_id
+          path: "$.parent_id"
+
+    output:
+      default_fields: [id, name, type, topic]
+      default_format: table
+      sort_by: position
+      sort_order: asc
+
+  messages:
+    description: "Get messages from a channel"
+
+    request:
+      builder: custom
+      script: builders/messages.py
+
+    args:
+      server:
+        type: string
+        required: true
+        description: "Server name"
+      channel:
+        type: string
+        required: true
+        description: "Channel name"
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 100
+        description: "Number of messages to fetch"
+
+    response:
+      parser: custom
+      script: parsers/messages.py
+
+    output:
+      default_fields: [author, content, timestamp, reactions]
+      default_format: table
