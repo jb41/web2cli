@@ -1,0 +1,168 @@
+meta:
+  name: reddit
+  domain: reddit.com
+  base_url: https://www.reddit.com
+  version: 0.1.0
+  description: "Reddit — posts, threads, search"
+  author: web2cli-core
+  transport: http
+  aliases:
+    - reddit
+  default_headers:
+    User-Agent: "web2cli/0.1"
+
+commands:
+  posts:
+    description: "List posts from a subreddit"
+
+    request:
+      method: GET
+      url: "/r/{{sub}}/{{sort}}.json"
+      params:
+        limit: "{{limit}}"
+        t: "{{time}}"
+
+    args:
+      sub:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Subreddit name (e.g. programming, python)"
+      sort:
+        type: string
+        required: false
+        default: hot
+        description: "Sort: hot, new, top, rising"
+      limit:
+        type: integer
+        required: false
+        default: 20
+        description: "Number of posts (default 20)"
+      time:
+        type: string
+        required: false
+        description: "Time filter for top sort: hour, day, week, month, year, all"
+
+    response:
+      format: json
+      extract: "$.data.children[*]"
+      fields:
+        - name: title
+          path: "$.data.title"
+        - name: author
+          path: "$.data.author"
+        - name: score
+          path: "$.data.score"
+        - name: comments
+          path: "$.data.num_comments"
+        - name: sub
+          path: "$.data.subreddit"
+        - name: url
+          path: "$.data.url"
+        - name: date
+          path: "$.data.created_utc"
+          transform: timestamp
+        - name: ratio
+          path: "$.data.upvote_ratio"
+        - name: permalink
+          path: "$.data.permalink"
+          template: "https://reddit.com{{value}}"
+
+    output:
+      default_fields: [title, score, comments, author, date]
+      default_format: table
+
+  thread:
+    description: "Get a thread with comments"
+
+    request:
+      method: GET
+      url: "/comments/{{id}}.json"
+      params:
+        limit: "{{limit}}"
+        sort: "{{sort}}"
+
+    args:
+      id:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Thread ID (e.g. 1qoxwdt)"
+      limit:
+        type: integer
+        required: false
+        default: 20
+        description: "Number of top-level comments"
+      sort:
+        type: string
+        required: false
+        default: best
+        description: "Sort: best, top, new, old, controversial"
+
+    response:
+      parser: custom
+      script: parsers/thread.py
+
+    output:
+      default_fields: [author, text, score, date]
+      default_format: table
+
+  search:
+    description: "Search posts in a subreddit"
+
+    request:
+      method: GET
+      url: "/r/{{sub}}/search.json"
+      params:
+        q: "{{query}}"
+        limit: "{{limit}}"
+        sort: "{{sort}}"
+        restrict_sr: "on"
+
+    args:
+      sub:
+        type: string
+        required: true
+        description: "Subreddit to search in"
+      query:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Search query"
+      limit:
+        type: integer
+        required: false
+        default: 20
+        description: "Number of results (default 20)"
+      sort:
+        type: string
+        required: false
+        default: relevance
+        description: "Sort: relevance, hot, top, new, comments"
+
+    response:
+      format: json
+      extract: "$.data.children[*]"
+      fields:
+        - name: title
+          path: "$.data.title"
+        - name: author
+          path: "$.data.author"
+        - name: score
+          path: "$.data.score"
+        - name: comments
+          path: "$.data.num_comments"
+        - name: sub
+          path: "$.data.subreddit"
+        - name: url
+          path: "$.data.url"
+        - name: date
+          path: "$.data.created_utc"
+          transform: timestamp
+        - name: permalink
+          path: "$.data.permalink"
+          template: "https://reddit.com{{value}}"
+
+    output:
+      default_fields: [title, score, comments, author, date]
+      default_format: table
