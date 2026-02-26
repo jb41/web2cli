@@ -3,7 +3,7 @@ meta:
   domain: discord.com
   base_url: https://discord.com/api/v9
   version: 0.1.0
-  description: "Discord — servers, channels, messages"
+  description: "Discord — servers, channels, messages, DMs"
   author: web2cli-core
   transport: http
   impersonate: chrome
@@ -124,6 +124,52 @@ commands:
         type: string
         required: true
         description: "Channel name"
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 100
+        description: "Number of messages to fetch"
+      no_attachments:
+        type: flag
+        required: false
+        description: "Hide attachment URLs from content"
+
+    response:
+      parser: custom
+      script: parsers/messages.py
+
+    output:
+      default_fields: [author, content, timestamp, reactions]
+      default_format: table
+
+  dm:
+    description: "List DM conversations"
+
+    request:
+      method: GET
+      url: "/users/@me/channels"
+
+    response:
+      parser: custom
+      script: parsers/dm.py
+
+    output:
+      default_fields: [recipients, type, last_message_id]
+      default_format: table
+
+  dm-messages:
+    description: "Get messages from a DM conversation"
+
+    request:
+      builder: custom
+      script: builders/dm_messages.py
+
+    args:
+      user:
+        type: string
+        required: true
+        description: "User display name"
       limit:
         type: int
         required: false

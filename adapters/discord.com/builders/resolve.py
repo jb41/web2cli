@@ -103,3 +103,53 @@ def resolve_channel_id(
     raise ValueError(
         f"Channel '{channel_name}' not found. Text channels: {available}"
     )
+
+
+def resolve_dm_channel_id(user_name: str, session_dict: dict | None) -> str:
+    """Resolve a user display name to a DM channel ID.
+
+    Checks cache first, then fetches from API and caches the result.
+    Matches against global_name and username (case-insensitive).
+    Raises ValueError if the user is not found.
+    """
+    cache_file = "dm_channels.json"
+
+    def _find(channels: list) -> str | None:
+        for ch in channels:
+            if ch.get("type") not in (1, 3):  # DM or Group DM
+                continue
+            for r in ch.get("recipients", []):
+                name = r.get("global_name") or r.get("username", "")
+                if name.lower() == user_name.lower():
+                    return ch["id"]
+        return None
+
+    # Check cache
+    cached = _read_cache(cache_file)
+    if cached:
+        found = _find(cached)
+        if found:
+            return found
+
+    # Fetch from API
+    headers = _make_headers(session_dict)
+    resp = httpx.get(f"{BASE_URL}/users/@me/channels", headers=headers)
+    if resp.status_code != 200:
+        raise ValueError(f"Failed to fetch DM channels: HTTP {resp.status_code}")
+
+    channels = resp.json()
+    _write_cache(cache_file, channels)
+
+    found = _find(channels)
+    if found:
+        return found
+
+    # List available DM recipients for error message
+    all_names = []
+    for ch in channels:
+        for r in ch.get("recipients", []):
+            all_names.append(r.get("global_name") or r.get("username", "?"))
+    available = ", ".join(all_names)
+    raise ValueError(
+        f"No DM with '{user_name}' found. Available: {available}"
+    )
