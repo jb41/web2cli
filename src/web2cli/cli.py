@@ -9,6 +9,14 @@ from typer.core import TyperGroup
 
 from web2cli import __version__
 from web2cli.adapter.loader import AdapterNotFound, load_adapter, list_adapters
+from web2cli.auth.manager import (
+    check_session,
+    create_session,
+    get_session,
+    parse_cookie_file,
+    parse_cookie_string,
+    remove_session,
+)
 from web2cli.executor.builder import build_from_script, build_from_spec
 from web2cli.executor.http import HttpError, execute
 from web2cli.output.formatter import format_output
@@ -291,13 +299,16 @@ def run_command(
     # Re-validate after stdin injection
     validate_command_args(command_args, cmd_spec.args)
 
+    # --- Load session (if adapter supports auth) ---
+    session = get_session(adapter.meta.domain, adapter.auth)
+
     # --- Build request ---
     if cmd_spec.request.get("builder") == "custom":
         request = build_from_script(
-            cmd_spec.request["script"], adapter.adapter_dir, command_args, None
+            cmd_spec.request["script"], adapter.adapter_dir, command_args, session
         )
     else:
-        request = build_from_spec(cmd_spec, command_args, None, adapter.meta)
+        request = build_from_spec(cmd_spec, command_args, session, adapter.meta)
 
     # --- Execute ---
     try:
@@ -409,20 +420,92 @@ def adapters_info(
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: web2cli login (placeholder for Step 10)
+# Subcommand: web2cli login / logout
 # ---------------------------------------------------------------------------
 
 
 @app.command("login")
 def login_command(
-    domain: str = typer.Argument(..., help="Domain to authenticate"),
+    domain: str = typer.Argument(..., help="Domain or alias to authenticate"),
     cookies: str = typer.Option(None, "--cookies", help='Cookies string "k=v; k2=v2"'),
     cookie_file: str = typer.Option(None, "--cookie-file", help="Path to cookies JSON"),
     token: str = typer.Option(None, "--token", help="Auth token"),
+    status: bool = typer.Option(False, "--status", help="Check login status"),
 ) -> None:
     """Save authentication session for a domain."""
-    err.print("[yellow]Login not yet implemented (Step 10)[/yellow]")
-    raise typer.Exit(1)
+    # Resolve alias → adapter domain
+    try:
+        adapter = load_adapter(domain)
+        resolved_domain = adapter.meta.domain
+    except AdapterNotFound:
+        resolved_domain = domain
+
+    # --status: show session info and exit
+    if status:
+        info = check_session(resolved_domain)
+        if not info.get("exists"):
+            err.print(f"[yellow]No session for {resolved_domain}[/yellow]")
+            raise typer.Exit(1)
+        err.print(f"[green]Logged in to {resolved_domain}[/green]")
+        err.print(f"  type: {info.get('auth_type', '?')}")
+        if info.get("cookie_keys"):
+            err.print(f"  cookies: {', '.join(info['cookie_keys'])}")
+        if info.get("has_token"):
+            err.print("  token: present")
+        if info.get("created_at"):
+            err.print(f"  created: {info['created_at']}")
+        raise typer.Exit(0)
+
+    # Parse cookies from string or file
+    parsed_cookies = None
+    if cookies:
+        parsed_cookies = parse_cookie_string(cookies)
+    elif cookie_file:
+        try:
+            parsed_cookies = parse_cookie_file(cookie_file)
+        except (OSError, ValueError) as e:
+            err.print(f"[red]Failed to read cookie file: {e}[/red]")
+            raise typer.Exit(1)
+
+    if not parsed_cookies and not token:
+        err.print("[red]Provide --cookies, --cookie-file, or --token[/red]")
+        raise typer.Exit(1)
+
+    # Warn about missing keys if adapter has an auth spec
+    try:
+        adapter = load_adapter(domain)
+        if adapter.auth and parsed_cookies:
+            for method in adapter.auth.get("methods", []):
+                expected = method.get("keys", [])
+                missing = [k for k in expected if k not in parsed_cookies]
+                if missing:
+                    err.print(
+                        f"[yellow]Warning: adapter expects cookie keys "
+                        f"{missing} but they were not provided[/yellow]"
+                    )
+    except AdapterNotFound:
+        pass
+
+    # Save session
+    session = create_session(resolved_domain, cookies=parsed_cookies, token=token)
+    err.print(f"[green]Session saved for {resolved_domain} ({session.auth_type})[/green]")
+
+
+@app.command("logout")
+def logout_command(
+    domain: str = typer.Argument(..., help="Domain or alias to log out"),
+) -> None:
+    """Remove stored session for a domain."""
+    try:
+        adapter = load_adapter(domain)
+        resolved_domain = adapter.meta.domain
+    except AdapterNotFound:
+        resolved_domain = domain
+
+    if remove_session(resolved_domain):
+        err.print(f"[green]Session removed for {resolved_domain}[/green]")
+    else:
+        err.print(f"[yellow]No session found for {resolved_domain}[/yellow]")
 
 
 # ---------------------------------------------------------------------------
