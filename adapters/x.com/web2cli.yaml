@@ -96,3 +96,52 @@ commands:
     output:
       default_fields: [author, text, date, likes, retweets, views]
       default_format: table
+
+  timeline:
+    description: "Home timeline (For you tab)"
+
+    request:
+      builder: custom
+      script: builders/timeline.py
+
+    args:
+      limit:
+        type: integer
+        required: false
+        default: 20
+        description: "Number of tweets (default 20)"
+
+    response:
+      parser: custom
+      script: parsers/timeline.py
+
+    output:
+      default_fields: [author, text, date, likes, retweets, views]
+      default_format: table
+
+  following:
+    description: "Following timeline"
+
+    request:
+      builder: custom
+      script: builders/following.py
+
+    args:
+      limit:
+        type: integer
+        required: false
+        default: 20
+        description: "Number of tweets (default 20)"
+      sort:
+        type: string
+        required: false
+        default: recent
+        description: "Sort order: recent or popular"
+
+    response:
+      parser: custom
+      script: parsers/timeline.py
+
+    output:
+      default_fields: [author, text, date, likes, retweets, views]
+      default_format: table
