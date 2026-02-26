@@ -1,0 +1,44 @@
+meta:
+  name: x
+  domain: x.com
+  base_url: https://x.com/i/api/graphql
+  version: 0.1.0
+  description: "X (Twitter) — tweets, profiles, search"
+  author: web2cli-core
+  transport: http
+  impersonate: chrome
+  aliases:
+    - x
+    - twitter
+  default_headers:
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+    Accept: "*/*"
+    Content-Type: "application/json"
+
+auth:
+  methods:
+    - type: cookies
+      keys: ["auth_token", "ct0"]
+
+commands:
+  tweet:
+    description: "Get a single tweet by ID or URL"
+
+    request:
+      builder: custom
+      script: builders/tweet.py
+
+    args:
+      id:
+        type: string
+        required: true
+        source: [arg, stdin]
+        description: "Tweet ID or URL (e.g. 1600301534863978497 or https://x.com/user/status/123)"
+
+    response:
+      parser: custom
+      script: parsers/tweet.py
+
+    output:
+      default_fields: [author, text, date, retweets, likes, replies, views]
+      default_format: table

@@ -3,5 +3,6 @@
 *.egg-info/
 __pycache__/
 
+dc-bot/
 SCRATCHPAD.md
 # spec-docs
