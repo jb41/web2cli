@@ -24,6 +24,10 @@ from web2cli.runtime.engine import execute_command
 err = Console(stderr=True)
 
 
+class CommandArgsError(Exception):
+    """Raised for user-facing command argument validation errors."""
+
+
 # ---------------------------------------------------------------------------
 # Custom TyperGroup: routes unknown subcommands to "run" handler
 # ---------------------------------------------------------------------------
@@ -105,7 +109,7 @@ def parse_dynamic_args(
         # All other types: consume next token as value
         i += 1
         if i >= len(raw_args):
-            break
+            raise CommandArgsError(f"--{key} expects a value")
         raw_value = raw_args[i]
         i += 1
 
@@ -113,14 +117,16 @@ def parse_dynamic_args(
             try:
                 command_args[key] = int(raw_value)
             except ValueError:
-                err.print(f"[red]--{key} expects an integer, got '{raw_value}'[/red]")
-                raise typer.Exit(1)
+                raise CommandArgsError(
+                    f"--{key} expects an integer, got '{raw_value}'"
+                )
         elif spec.type == "float":
             try:
                 command_args[key] = float(raw_value)
             except ValueError:
-                err.print(f"[red]--{key} expects a number, got '{raw_value}'[/red]")
-                raise typer.Exit(1)
+                raise CommandArgsError(
+                    f"--{key} expects a number, got '{raw_value}'"
+                )
         elif spec.type == "bool":
             command_args[key] = raw_value.lower() in ("true", "1", "yes")
         else:
@@ -134,29 +140,24 @@ def parse_dynamic_args(
     return command_args, global_flags
 
 
-def validate_command_args(
-    command_args: dict, arg_specs: dict[str, CommandArg]
-) -> None:
-    """Validate parsed args. Prints errors to stderr and exits on failure."""
+def validate_command_args(command_args: dict, arg_specs: dict[str, CommandArg]) -> None:
+    """Validate parsed args. Raises CommandArgsError on invalid input."""
     # Required
     missing = [
         name for name, spec in arg_specs.items()
         if spec.required and name not in command_args
     ]
     if missing:
-        err.print(
-            f"[red]Missing required arguments: "
-            f"{', '.join('--' + m for m in missing)}[/red]"
+        raise CommandArgsError(
+            f"Missing required arguments: {', '.join('--' + m for m in missing)}"
         )
-        raise typer.Exit(1)
 
     # Enum
     for name, spec in arg_specs.items():
         if spec.enum and name in command_args and command_args[name] not in spec.enum:
-            err.print(
-                f"[red]--{name} must be one of: {', '.join(spec.enum)}[/red]"
+            raise CommandArgsError(
+                f"--{name} must be one of: {', '.join(spec.enum)}"
             )
-            raise typer.Exit(1)
 
     # Min/max clamping
     for name, spec in arg_specs.items():
@@ -278,8 +279,14 @@ def run_command(
 
     cmd_spec = adapter.commands[command]
 
-    # Parse dynamic args from ctx.args
-    command_args, extra_globals = parse_dynamic_args(ctx.args, cmd_spec.args)
+    # Parse + validate command args
+    try:
+        command_args, extra_globals = parse_dynamic_args(ctx.args, cmd_spec.args)
+    except CommandArgsError as e:
+        err.print(f"[red]{e}[/red]")
+        err.print()
+        print_command_help(adapter, cmd_spec)
+        raise typer.Exit(1)
 
     # Merge extra globals
     for k, v in extra_globals.items():
@@ -297,8 +304,14 @@ def run_command(
                 command_args[arg_name] = stdin_value
                 break
 
-    # Re-validate after stdin injection
-    validate_command_args(command_args, cmd_spec.args)
+    # Re-validate after stdin injection (required/enum/min/max rules)
+    try:
+        validate_command_args(command_args, cmd_spec.args)
+    except CommandArgsError as e:
+        err.print(f"[red]{e}[/red]")
+        err.print()
+        print_command_help(adapter, cmd_spec)
+        raise typer.Exit(1)
 
     # --- Load session (if adapter supports auth) ---
     session = get_session(adapter.meta.domain, adapter.auth)
