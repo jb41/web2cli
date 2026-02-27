@@ -181,6 +181,8 @@ GLOBAL_FLAGS_HELP = """\
 [bold]Global flags:[/bold]
   --format, -f       Output format: table, json, csv, plain, md
   --fields           Comma-separated list of fields to display
+  --sort             Override output sort field (if command doesn't use --sort)
+  --sort-by          Override output sort field (always safe)
   --raw              Show raw HTTP response body
   --verbose          Show request URL, params, and timing
   --no-color         Disable colors and use ASCII table borders
@@ -286,7 +288,7 @@ def run_command(
     for k, v in extra_globals.items():
         if k == "limit":
             try:
-                v = int(v)
+                extra_globals[k] = int(v)
             except (ValueError, TypeError):
                 pass
 
@@ -356,16 +358,27 @@ def run_command(
         err.print("[yellow]No results.[/yellow]")
         raise typer.Exit(0)
 
-    # --- Sort (skip for custom parsers — they control their own order) ---
+    # --- Sort ---
     output_spec = cmd_spec.output
-    if response_spec.get("parser") != "custom":
-        sort_by = output_spec.get("sort_by")
-        sort_order = output_spec.get("sort_order", "desc")
-        if sort_by and records:
-            records.sort(
-                key=lambda r: r.get(sort_by, 0) or 0,
-                reverse=(sort_order == "desc"),
-            )
+    global_sort = extra_globals.get("sort_by")
+    if global_sort is None:
+        global_sort = extra_globals.get("sort")
+
+    if isinstance(global_sort, bool):
+        err.print("[red]--sort/--sort-by expects a field name[/red]")
+        raise typer.Exit(1)
+
+    sort_by = global_sort or output_spec.get("sort_by")
+    sort_order = output_spec.get("sort_order", "desc")
+    should_sort = bool(sort_by) and (
+        bool(global_sort) or response_spec.get("parser") != "custom"
+    )
+
+    if should_sort and records:
+        records.sort(
+            key=lambda r: r.get(sort_by, 0) or 0,
+            reverse=(sort_order == "desc"),
+        )
 
     # --- Limit ---
     limit = extra_globals.get("limit")

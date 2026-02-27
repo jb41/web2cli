@@ -54,9 +54,14 @@ def _find_adapter_dir(domain_or_alias: str) -> tuple[Path, str]:
 
 def _parse_command_arg(name: str, raw: dict) -> CommandArg:
     """Parse a single command argument from YAML dict."""
+    arg_type = raw.get("type", "string")
+    # Be permissive for common synonym used in adapters/spec drafts.
+    if arg_type == "integer":
+        arg_type = "int"
+
     return CommandArg(
         name=name,
-        type=raw.get("type", "string"),
+        type=arg_type,
         required=raw.get("required", False),
         default=raw.get("default"),
         description=raw.get("description", ""),

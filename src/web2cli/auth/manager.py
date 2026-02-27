@@ -88,6 +88,19 @@ def get_session(domain: str, auth_spec: dict | None = None) -> Session | None:
             if env_var:
                 env_val = os.environ.get(env_var)
                 if env_val:
+                    method_type = str(method.get("type", "cookies")).lower()
+
+                    if method_type == "token":
+                        token = env_val.strip()
+                        if token:
+                            return Session(
+                                domain=domain,
+                                auth_type="token",
+                                data={"token": token},
+                            )
+                        continue
+
+                    # Default to cookies for backwards compatibility.
                     cookies = parse_cookie_string(env_val)
                     return Session(
                         domain=domain,
