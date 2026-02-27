@@ -411,8 +411,14 @@ def print_command_help(adapter: AdapterSpec, cmd: CommandSpec) -> None:
 )
 def run_command(
     ctx: typer.Context,
-    domain: str = typer.Argument(..., help="Domain or adapter alias"),
-    command: str = typer.Argument(None, help="Command to execute"),
+    domain: str = typer.Argument(
+        ...,
+        help="Domain or adapter alias",
+    ),
+    command: str = typer.Argument(
+        None,
+        help="Command to execute",
+    ),
     output_format: str = typer.Option(
         None, "--format", "-f", help="Output format (table|json|csv|plain)"
     ),
@@ -598,7 +604,10 @@ def adapters_list() -> None:
 
 @adapters_app.command("info")
 def adapters_info(
-    domain: str = typer.Argument(..., help="Domain or alias"),
+    domain: str = typer.Argument(
+        ...,
+        help="Domain or alias",
+    ),
 ) -> None:
     """Show details for an adapter."""
     try:
@@ -629,7 +638,10 @@ def adapters_validate() -> None:
 
 @adapters_app.command("lint")
 def adapters_lint(
-    domain: str | None = typer.Argument(None, help="Optional domain or alias"),
+    domain: str | None = typer.Argument(
+        None,
+        help="Optional domain or alias",
+    ),
 ) -> None:
     """Run semantic lint checks for adapter specs."""
     had_errors = False
@@ -683,7 +695,10 @@ def adapters_lint(
 
 @app.command("login")
 def login_command(
-    domain: str = typer.Argument(..., help="Domain or alias to authenticate"),
+    domain: str = typer.Argument(
+        ...,
+        help="Domain or alias to authenticate",
+    ),
     cookies: str = typer.Option(None, "--cookies", help='Cookies string "k=v; k2=v2"'),
     cookie_file: str = typer.Option(None, "--cookie-file", help="Path to cookies JSON"),
     token: str = typer.Option(None, "--token", help="Auth token"),
@@ -750,7 +765,10 @@ def login_command(
 
 @app.command("logout")
 def logout_command(
-    domain: str = typer.Argument(..., help="Domain or alias to log out"),
+    domain: str = typer.Argument(
+        ...,
+        help="Domain or alias to log out",
+    ),
 ) -> None:
     """Remove stored session for a domain."""
     try:
