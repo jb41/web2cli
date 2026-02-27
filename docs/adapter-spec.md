@@ -1,12 +1,16 @@
-# web2cli Adapter Specification v0.2
+# web2cli Adapter Specification
 
 > Every website is a command.
 
 ---
 
+Current spec version: `0.2`
+
+---
+
 ## Philosophy
 
-v0.2 moves behavior from adapter-local Python scripts into declarative YAML.
+Spec `0.2` moves behavior from adapter-local Python scripts into declarative YAML.
 
 Main principles:
 
@@ -17,6 +21,16 @@ Main principles:
 5. Provider plugins for protocol-heavy sites (e.g. `x_graphql`)
 
 Custom Python is still an escape hatch, not the default.
+
+---
+
+## Normative Language
+
+The keywords `MUST`, `SHOULD`, and `MAY` in this document are normative:
+
+- `MUST`: required for compliance.
+- `SHOULD`: strongly recommended unless there is a clear reason not to.
+- `MAY`: optional behavior.
 
 ---
 
@@ -38,6 +52,46 @@ auth:
 resources:
 commands:
 ```
+
+---
+
+## Minimal Complete Adapter
+
+Smallest practical adapter/command:
+
+```yaml
+meta:
+  spec_version: "0.2"
+  name: example
+  domain: example.com
+  base_url: https://api.example.com
+  version: 0.2.0
+  description: "Example adapter"
+  author: web2cli-core
+
+commands:
+  ping:
+    description: "Ping endpoint"
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /ping
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$"
+    output:
+      from_step: parsed
+      default_format: json
+```
+
+This example is valid because:
+
+- `meta.spec_version` is `0.2`.
+- command defines `pipeline`.
+- output points to an existing step.
 
 ---
 
@@ -384,7 +438,63 @@ Global CLI flags still apply:
 
 ---
 
-## 10. Provider Plugins
+## 10. Validate vs Lint
+
+Adapter quality checks are split into two commands:
+
+| Command | Scope | Fails on |
+|---|---|---|
+| `web2cli adapters validate` | Structural checks | invalid schema shape, unsupported arg types, missing pipeline, missing scripts for custom parser |
+| `web2cli adapters lint` | Semantic checks | unknown step refs, unknown provider, invalid ops/transforms, bad template references, invalid auth inject target |
+
+Use both in CI:
+
+1. `validate` first (hard schema gate)
+2. `lint` second (semantic correctness gate)
+
+---
+
+## 11. Runtime Error Semantics
+
+Execution rules:
+
+- A step error (`request`, `resolve`, `parse`, `transform`, `fanout`) MUST fail the command with non-zero exit.
+- Unresolved `resolve` input MUST fail with an explanatory error listing available candidates.
+- `parse` producing an empty record list is not an error by itself; CLI prints `No results.` and exits `0`.
+- `--raw` returns last response body (if any) and exits `0` unless execution failed earlier.
+- HTTP/network failures are surfaced as command errors (exit `1`).
+
+---
+
+## 12. Trace (`--trace`)
+
+`--trace` prints runtime diagnostics to stderr:
+
+- step start/finish (`step[i] type:name`)
+- request/response metadata (method, URL, status, payload size)
+- resource cache events (hit/miss/write)
+- final output summary (`records=N`)
+
+Example:
+
+```text
+command=reddit.thread steps=4 args=['id', 'limit']
+step[0] request:fetch start
+step[0] request:fetch: request GET https://www.reddit.com/comments/....json
+step[0] request:fetch: response status=200 body_bytes=12345 json=yes
+step[1] parse:post done output=list[1]
+result records=21 output_from=parsed last_response_body_bytes=12345
+```
+
+Use `--trace` when:
+
+- authoring a new adapter
+- debugging empty outputs
+- diagnosing unexpected step dependencies
+
+---
+
+## 13. Provider Plugins
 
 Provider plugins live in core runtime (not adapter-local scripts).
 
@@ -396,10 +506,21 @@ Provider handles protocol-specific behavior (query-id refresh, transaction heade
 
 ---
 
-## 11. Compatibility Policy
+## 14. Compatibility Policy
 
 web2cli runtime is v0.2-only.
 
 - v0.1 adapters are not supported.
 - Commands must define `pipeline`.
 - Optional `parse: { parser: custom, script: ... }` remains available as an escape hatch.
+
+---
+
+## 15. Spec Versioning Policy
+
+Versioning rules:
+
+- `0.2.x` MAY add backward-compatible fields, ops, or provider capabilities.
+- `0.2.x` MUST NOT silently change existing semantics.
+- Breaking schema/runtime changes MUST use a new minor spec line (for example `0.3`).
+- Adapters SHOULD pin `meta.spec_version` explicitly.
