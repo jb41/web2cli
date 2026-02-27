@@ -1,5 +1,7 @@
 """CLI entry point for web2cli."""
 
+from typing import Any
+
 import typer
 from rich.console import Console
 from typer.core import TyperGroup
@@ -199,6 +201,168 @@ def print_adapter_info(adapter: AdapterSpec) -> None:
     err.print()
 
 
+def _unique_extend(dest: list[str], values: list[str]) -> None:
+    for value in values:
+        if value and value not in dest:
+            dest.append(value)
+
+
+def _field_names_from_parse_spec(parse_spec: dict[str, Any]) -> list[str]:
+    fields = parse_spec.get("fields")
+    if not isinstance(fields, list):
+        return []
+    out: list[str] = []
+    for field in fields:
+        if isinstance(field, dict) and isinstance(field.get("name"), str):
+            _unique_extend(out, [field["name"]])
+    return out
+
+
+def _resource_output_fields(
+    adapter: AdapterSpec,
+    resource_name: str,
+) -> tuple[list[str], bool]:
+    resource_spec = adapter.resources.get(resource_name)
+    if not isinstance(resource_spec, dict):
+        return [], False
+
+    parse_spec = resource_spec.get("response") or resource_spec.get("parse")
+    if not isinstance(parse_spec, dict):
+        return [], False
+
+    names = _field_names_from_parse_spec(parse_spec)
+    if names:
+        return names, True
+    return [], False
+
+
+def _collect_pipeline_steps(cmd: CommandSpec) -> list[tuple[str, str, dict[str, Any]]]:
+    steps: list[tuple[str, str, dict[str, Any]]] = []
+    for idx, raw_step in enumerate(cmd.pipeline or []):
+        if not isinstance(raw_step, dict):
+            continue
+        step_type = None
+        for key in ("resolve", "request", "fanout", "parse", "transform"):
+            if key in raw_step:
+                step_type = key
+                break
+        if step_type is None:
+            continue
+
+        step_spec = raw_step.get(step_type) or {}
+        if not isinstance(step_spec, dict):
+            step_spec = {}
+        step_name = str(step_spec.get("name") or raw_step.get("name") or f"{step_type}_{idx}")
+        steps.append((step_name, step_type, step_spec))
+    return steps
+
+
+def _infer_command_fields(
+    adapter: AdapterSpec,
+    cmd: CommandSpec,
+) -> tuple[list[str], list[str], bool]:
+    raw_default_fields = cmd.output.get("default_fields")
+    default_fields = (
+        [str(x) for x in raw_default_fields if str(x)]
+        if isinstance(raw_default_fields, list)
+        else []
+    )
+
+    steps = _collect_pipeline_steps(cmd)
+    if not steps:
+        return list(default_fields), default_fields, False
+
+    step_index = {name: i for i, (name, _, _) in enumerate(steps)}
+    cache: dict[str, tuple[list[str], bool]] = {}
+
+    def _prev_step_name(index: int) -> str | None:
+        return steps[index - 1][0] if index > 0 else None
+
+    def _infer(step_name: str, visiting: set[str]) -> tuple[list[str], bool]:
+        if step_name in cache:
+            return cache[step_name]
+        if step_name in visiting:
+            return [], False
+        index = step_index.get(step_name)
+        if index is None:
+            return [], False
+
+        visiting.add(step_name)
+        _, step_type, step_spec = steps[index]
+        fields: list[str] = []
+        complete = True
+
+        if step_type == "parse":
+            if step_spec.get("parser") == "custom":
+                complete = False
+            else:
+                parse_fields = _field_names_from_parse_spec(step_spec)
+                if parse_fields:
+                    _unique_extend(fields, parse_fields)
+                else:
+                    complete = False
+                    from_step = step_spec.get("from") or _prev_step_name(index)
+                    if isinstance(from_step, str):
+                        source_fields, source_complete = _infer(from_step, visiting)
+                        _unique_extend(fields, source_fields)
+                        complete = complete and source_complete
+
+        elif step_type == "resolve":
+            resource_name = step_spec.get("resource")
+            if isinstance(resource_name, str):
+                resource_fields, resource_complete = _resource_output_fields(adapter, resource_name)
+                _unique_extend(fields, resource_fields)
+                complete = resource_complete
+            else:
+                complete = False
+
+        elif step_type == "transform":
+            from_step = step_spec.get("from") or _prev_step_name(index)
+            if isinstance(from_step, str):
+                source_fields, source_complete = _infer(from_step, visiting)
+                _unique_extend(fields, source_fields)
+                complete = source_complete
+            else:
+                complete = False
+
+            ops = step_spec.get("ops", [])
+            if isinstance(ops, list):
+                for op in ops:
+                    if not (isinstance(op, dict) and "concat" in op):
+                        continue
+                    cfg = op.get("concat") or {}
+                    extra_steps = cfg.get("steps", [])
+                    if isinstance(extra_steps, str):
+                        extra_steps = [extra_steps]
+                    if not isinstance(extra_steps, list):
+                        complete = False
+                        continue
+                    for extra_step in extra_steps:
+                        if not isinstance(extra_step, str):
+                            complete = False
+                            continue
+                        extra_fields, extra_complete = _infer(extra_step, visiting)
+                        _unique_extend(fields, extra_fields)
+                        complete = complete and extra_complete
+
+        else:
+            # request/fanout output shape is dynamic unless parsed later.
+            complete = False
+
+        visiting.remove(step_name)
+        cache[step_name] = (fields, complete)
+        return cache[step_name]
+
+    output_from = cmd.output.get("from_step")
+    if not isinstance(output_from, str) or output_from not in step_index:
+        output_from = steps[-1][0]
+
+    inferred_fields, fields_complete = _infer(output_from, set())
+    available_fields = list(inferred_fields)
+    _unique_extend(available_fields, default_fields)
+    return available_fields, default_fields, fields_complete
+
+
 def print_command_help(adapter: AdapterSpec, cmd: CommandSpec) -> None:
     err.print(
         f"\n[bold]web2cli {adapter.meta.name} {cmd.name}[/bold]"
@@ -214,6 +378,17 @@ def print_command_help(adapter: AdapterSpec, cmd: CommandSpec) -> None:
             enum_str = f" [{', '.join(arg.enum)}]" if arg.enum else ""
             pipe_str = "  [dim]pipeable[/dim]" if "stdin" in arg.source else ""
             err.print(f"  --{name:15} {arg.type:10} {desc}{enum_str}  ({req}){pipe_str}")
+
+    available_fields, default_fields, fields_complete = _infer_command_fields(adapter, cmd)
+    if available_fields:
+        default_set = set(default_fields)
+        err.print("\n[bold]Fields:[/bold]")
+        for field_name in available_fields:
+            suffix = " [green](default)[/green]" if field_name in default_set else ""
+            err.print(f"  {field_name}{suffix}")
+        if not fields_complete:
+            err.print("  [dim](inferred list may be incomplete for dynamic outputs)[/dim]")
+
     err.print()
     err.print(GLOBAL_FLAGS_HELP)
     err.print()
