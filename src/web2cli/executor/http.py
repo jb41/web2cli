@@ -16,6 +16,12 @@ class HttpError(Exception):
 
 async def _execute_httpx(request: Request) -> tuple[int, dict, str]:
     """Execute via httpx (standard path)."""
+    content_type = (request.content_type or request.headers.get("Content-Type", "")).lower()
+    body_is_form = (
+        isinstance(request.body, dict)
+        and content_type.startswith("application/x-www-form-urlencoded")
+    )
+
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.request(
@@ -24,8 +30,9 @@ async def _execute_httpx(request: Request) -> tuple[int, dict, str]:
                 params=request.params or None,
                 headers=request.headers,
                 cookies=request.cookies,
-                content=request.body if isinstance(request.body, str) else None,
-                json=request.body if isinstance(request.body, dict) else None,
+                content=request.body if isinstance(request.body, (str, bytes)) else None,
+                data=request.body if body_is_form else None,
+                json=request.body if isinstance(request.body, dict) and not body_is_form else None,
             )
     except httpx.ConnectError:
         raise HttpError(0, f"Connection failed: could not reach {request.url}")
@@ -41,6 +48,12 @@ async def _execute_impersonate(
     """Execute via curl_cffi with TLS impersonation."""
     from curl_cffi.requests import AsyncSession
 
+    content_type = (request.content_type or request.headers.get("Content-Type", "")).lower()
+    body_is_form = (
+        isinstance(request.body, dict)
+        and content_type.startswith("application/x-www-form-urlencoded")
+    )
+
     try:
         async with AsyncSession(impersonate=impersonate) as session:
             response = await session.request(
@@ -49,8 +62,10 @@ async def _execute_impersonate(
                 params=request.params or None,
                 headers=request.headers,
                 cookies=request.cookies,
-                data=request.body if isinstance(request.body, str) else None,
-                json=request.body if isinstance(request.body, dict) else None,
+                data=request.body if body_is_form else (
+                    request.body if isinstance(request.body, (str, bytes)) else None
+                ),
+                json=request.body if isinstance(request.body, dict) and not body_is_form else None,
                 allow_redirects=True,
             )
     except ConnectionError:

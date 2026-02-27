@@ -23,6 +23,11 @@ def validate_adapter(spec: AdapterSpec, adapter_dir: Path) -> None:
                 f"Adapter missing required meta field: {field}"
             )
 
+    if not spec.meta.spec_version.startswith("0.2"):
+        raise AdapterValidationError(
+            "Only adapter spec_version 0.2 is supported"
+        )
+
     # Validate commands
     for cmd_name, cmd in spec.commands.items():
         # Validate command args
@@ -55,28 +60,68 @@ def validate_adapter(spec: AdapterSpec, adapter_dir: Path) -> None:
                 f"Command '{cmd_name}': only one argument can use 'stdin' source"
             )
 
-        # Check custom parser scripts exist
-        response = cmd.response
-        if response.get("parser") == "custom":
-            script = response.get("script")
-            if not script:
+        if not cmd.pipeline:
+            raise AdapterValidationError(
+                f"Command '{cmd_name}': pipeline is required for spec v0.2"
+            )
+
+        if not isinstance(cmd.pipeline, list):
+            raise AdapterValidationError(
+                f"Command '{cmd_name}': pipeline must be a list"
+            )
+
+        for idx, raw_step in enumerate(cmd.pipeline):
+            if not isinstance(raw_step, dict):
                 raise AdapterValidationError(
-                    f"Command '{cmd_name}': custom parser missing 'script' field"
-                )
-            if not (adapter_dir / script).is_file():
-                raise AdapterValidationError(
-                    f"Command '{cmd_name}': parser script not found: {script}"
+                    f"Command '{cmd_name}': pipeline step {idx} must be an object"
                 )
 
-        # Check custom builder scripts exist
-        request = cmd.request
-        if request.get("builder") == "custom":
-            script = request.get("script")
-            if not script:
+            step_keys = [
+                k for k in raw_step.keys()
+                if k in {"request", "resolve", "fanout", "parse", "transform"}
+            ]
+            if len(step_keys) != 1:
                 raise AdapterValidationError(
-                    f"Command '{cmd_name}': custom builder missing 'script' field"
+                    f"Command '{cmd_name}': pipeline step {idx} must contain exactly "
+                    f"one step type (request|resolve|fanout|parse|transform)"
                 )
-            if not (adapter_dir / script).is_file():
+            step_type = step_keys[0]
+            step_spec = raw_step.get(step_type) or {}
+
+            if not isinstance(step_spec, dict):
                 raise AdapterValidationError(
-                    f"Command '{cmd_name}': builder script not found: {script}"
+                    f"Command '{cmd_name}': {step_type} step {idx} must be an object"
                 )
+
+            if step_type == "resolve":
+                resource_name = step_spec.get("resource")
+                if not resource_name:
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': resolve step {idx} missing resource"
+                    )
+                if resource_name not in spec.resources:
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': resolve step {idx} references unknown "
+                        f"resource '{resource_name}'"
+                    )
+
+            if step_type == "fanout":
+                if "request" not in step_spec:
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': fanout step {idx} missing request block"
+                    )
+                if not isinstance(step_spec.get("request"), dict):
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': fanout step {idx} request must be an object"
+                    )
+
+            if step_type == "parse" and step_spec.get("parser") == "custom":
+                script = step_spec.get("script")
+                if not script:
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': parse step {idx} custom parser missing script"
+                    )
+                if not (adapter_dir / script).is_file():
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': parse step {idx} parser script not found: {script}"
+                    )

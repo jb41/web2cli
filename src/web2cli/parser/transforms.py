@@ -17,9 +17,26 @@ def apply_transform(value, transform: str):
             return value
 
     if transform == "int":
+        text = str(value).strip().lower().replace(",", "")
+        if text.endswith("k"):
+            try:
+                return int(float(text[:-1]) * 1000)
+            except (ValueError, TypeError):
+                pass
+        if text.endswith("m"):
+            try:
+                return int(float(text[:-1]) * 1000000)
+            except (ValueError, TypeError):
+                pass
         try:
-            return int(float(str(value).replace(",", "")))
+            return int(float(text))
         except (ValueError, TypeError):
+            m = re.search(r"-?\d[\d,]*", text)
+            if m:
+                try:
+                    return int(m.group(0).replace(",", ""))
+                except ValueError:
+                    return value
             return value
 
     if transform == "lowercase":
@@ -40,6 +57,15 @@ def apply_transform(value, transform: str):
 
     if transform == "timestamp":
         return _parse_timestamp(value)
+
+    if transform == "x_datetime":
+        return _parse_twitter_datetime(value)
+
+    if transform == "x_date":
+        full = _parse_twitter_datetime(value)
+        if isinstance(full, str) and len(full) >= 10:
+            return full[:10]
+        return full
 
     if transform.startswith("truncate:"):
         try:
@@ -66,6 +92,17 @@ def _parse_timestamp(value) -> str:
 
     # ISO string
     if isinstance(value, str):
+        # numeric string (unix seconds / milliseconds)
+        if re.fullmatch(r"\d+(\.\d+)?", value.strip()):
+            try:
+                num = float(value.strip())
+                if num > 1e12:
+                    num = num / 1000
+                dt = datetime.fromtimestamp(num, tz=timezone.utc)
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OSError):
+                pass
+
         for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
             try:
                 dt = datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
@@ -75,3 +112,14 @@ def _parse_timestamp(value) -> str:
         return value
 
     return str(value)
+
+
+def _parse_twitter_datetime(value) -> str:
+    """Convert X/Twitter datetime to readable format."""
+    if not isinstance(value, str):
+        return str(value)
+    try:
+        dt = datetime.strptime(value, "%a %b %d %H:%M:%S %z %Y")
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value

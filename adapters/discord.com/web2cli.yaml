@@ -1,8 +1,9 @@
 meta:
+  spec_version: "0.2"
   name: discord
   domain: discord.com
   base_url: https://discord.com/api/v9
-  version: 0.1.0
+  version: 0.2.0
   description: "Discord — servers, channels, messages, DMs"
   author: web2cli-core
   transport: http
@@ -18,103 +19,185 @@ auth:
   methods:
     - type: token
       env_var: WEB2CLI_DISCORD_TOKEN
+      inject:
+        target: header
+        key: Authorization
+
+resources:
+  guilds:
+    cache:
+      key: guilds
+      ttl: 3600
+    request:
+      method: GET
+      url: /users/@me/guilds
+    response:
+      format: json
+      extract: "$[*]"
+      fields:
+        - name: id
+          from: "$.id"
+        - name: name
+          from: "$.name"
+
+  guild_channels:
+    cache:
+      key: "guild_channels_{{steps.guild.id}}"
+      ttl: 3600
+    request:
+      method: GET
+      url: /guilds/{{steps.guild.id}}/channels
+    response:
+      format: json
+      extract: "$[*]"
+      fields:
+        - name: id
+          from: "$.id"
+        - name: name
+          from: "$.name"
+        - name: type
+          from: "$.type"
+        - name: topic
+          from: "$.topic"
+        - name: position
+          from: "$.position"
+        - name: parent_id
+          from: "$.parent_id"
+
+  dm_channels:
+    cache:
+      key: dm_channels
+      ttl: 300
+    request:
+      method: GET
+      url: /users/@me/channels
+    response:
+      format: json
+      extract: "$[*]"
+      fields:
+        - name: id
+          from: "$.id"
+        - name: name
+          from:
+            coalesce:
+              - "$.recipients[0].global_name"
+              - "$.recipients[0].username"
+        - name: recipients
+          from: "$.recipients[*].username"
+          ops:
+            - join:
+                sep: ", "
+        - name: type
+          from: "$.type"
 
 commands:
   me:
     description: "Show current user info"
-
-    request:
-      method: GET
-      url: "/users/@me"
-
-    response:
-      format: json
-      extract: "$"
-      fields:
-        - name: id
-          path: "$.id"
-        - name: username
-          path: "$.username"
-        - name: global_name
-          path: "$.global_name"
-        - name: email
-          path: "$.email"
-        - name: phone
-          path: "$.phone"
-        - name: mfa
-          path: "$.mfa_enabled"
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /users/@me
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: username
+              from: "$.username"
+            - name: global_name
+              from: "$.global_name"
+            - name: email
+              from: "$.email"
+            - name: phone
+              from: "$.phone"
+            - name: mfa
+              from: "$.mfa_enabled"
     output:
+      from_step: parsed
       default_fields: [id, username, global_name, email]
       default_format: table
 
   servers:
     description: "List your Discord servers (guilds)"
-
-    request:
-      method: GET
-      url: "/users/@me/guilds"
-
-    response:
-      format: json
-      extract: "$[*]"
-      fields:
-        - name: id
-          path: "$.id"
-        - name: name
-          path: "$.name"
-        - name: owner
-          path: "$.owner"
-        - name: permissions
-          path: "$.permissions"
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /users/@me/guilds
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$[*]"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: name
+              from: "$.name"
+            - name: owner
+              from: "$.owner"
+            - name: permissions
+              from: "$.permissions"
     output:
+      from_step: parsed
       default_fields: [id, name, owner]
       default_format: table
 
   channels:
     description: "List channels in a server"
-
-    request:
-      builder: custom
-      script: builders/channels.py
-
     args:
       server:
         type: string
         required: true
         description: "Server name"
-
-    response:
-      format: json
-      extract: "$[*]"
-      fields:
-        - name: id
-          path: "$.id"
-        - name: name
-          path: "$.name"
-        - name: type
-          path: "$.type"
-        - name: topic
-          path: "$.topic"
-        - name: position
-          path: "$.position"
-        - name: parent_id
-          path: "$.parent_id"
-
+    pipeline:
+      - resolve:
+          name: guild
+          resource: guilds
+          input: "{{args.server}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: GET
+          url: /guilds/{{steps.guild.id}}/channels
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$[*]"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: name
+              from: "$.name"
+            - name: type
+              from: "$.type"
+            - name: topic
+              from: "$.topic"
+            - name: position
+              from: "$.position"
+            - name: parent_id
+              from: "$.parent_id"
+      - transform:
+          name: sorted
+          from: parsed
+          ops:
+            - sort:
+                by: position
+                order: asc
     output:
+      from_step: sorted
       default_fields: [id, name, type, topic]
       default_format: table
-      sort_by: position
-      sort_order: asc
 
   messages:
     description: "Get messages from a channel"
-
-    request:
-      builder: custom
-      script: builders/messages.py
-
     args:
       server:
         type: string
@@ -130,26 +213,65 @@ commands:
         default: 20
         max: 100
         description: "Number of messages to fetch"
-      no_attachments:
-        type: flag
-        required: false
-        description: "Hide attachment URLs from content"
-
-    response:
-      parser: custom
-      script: parsers/messages.py
-
+    pipeline:
+      - resolve:
+          name: guild
+          resource: guilds
+          input: "{{args.server}}"
+          by: name
+          value: id
+          match: ci_equals
+      - resolve:
+          name: channel
+          resource: guild_channels
+          input: "{{args.channel}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: GET
+          url: /channels/{{steps.channel.id}}/messages
+          params:
+            limit: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$[*]"
+          fields:
+            - name: author
+              from:
+                coalesce:
+                  - "$.author.global_name"
+                  - "$.author.username"
+            - name: content
+              from: "$.content"
+              ops:
+                - append_urls:
+                    path: "$.attachments[*].url"
+                    sep: " "
+            - name: timestamp
+              from: "$.timestamp"
+              transform: timestamp
+            - name: reactions
+              from: "$.reactions[*].emoji.name"
+              ops:
+                - join:
+                    sep: " "
+            - name: type
+              from: "$.type"
+            - name: id
+              from: "$.id"
+          post_ops:
+            - reverse
     output:
+      from_step: parsed
       default_fields: [author, content, timestamp, reactions]
       default_format: table
 
   send:
     description: "Send a message to a channel"
-
-    request:
-      builder: custom
-      script: builders/send.py
-
     args:
       server:
         type: string
@@ -164,37 +286,84 @@ commands:
         required: true
         source: [arg, stdin]
         description: "Message content"
-
-    response:
-      parser: custom
-      script: parsers/send.py
-
+    pipeline:
+      - resolve:
+          name: guild
+          resource: guilds
+          input: "{{args.server}}"
+          by: name
+          value: id
+          match: ci_equals
+      - resolve:
+          name: channel
+          resource: guild_channels
+          input: "{{args.channel}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: send
+          method: POST
+          url: /channels/{{steps.channel.id}}/messages
+          body:
+            encoding: json
+            template:
+              content: "{{args.message}}"
+      - parse:
+          name: parsed
+          from: send
+          format: json
+          extract: "$"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: content
+              from: "$.content"
+            - name: timestamp
+              from: "$.timestamp"
+              transform: timestamp
+            - name: channel_id
+              from: "$.channel_id"
     output:
+      from_step: parsed
       default_fields: [id, content, timestamp]
       default_format: table
 
   dm:
     description: "List DM conversations"
-
-    request:
-      method: GET
-      url: "/users/@me/channels"
-
-    response:
-      parser: custom
-      script: parsers/dm.py
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /users/@me/channels
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$[*]"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: recipients
+              # from: "$.recipients[*].username"
+              from:
+                coalesce:
+                  - "$.recipients[*].global_name"
+                  - "$.recipients[*].username"
+              ops:
+                - join:
+                    sep: ", "
+            - name: type
+              from: "$.type"
+            - name: last_message_id
+              from: "$.last_message_id"
     output:
+      from_step: parsed
       default_fields: [recipients, type, last_message_id]
       default_format: table
 
   dm-messages:
     description: "Get messages from a DM conversation"
-
-    request:
-      builder: custom
-      script: builders/dm_messages.py
-
     args:
       user:
         type: string
@@ -206,26 +375,54 @@ commands:
         default: 20
         max: 100
         description: "Number of messages to fetch"
-      no_attachments:
-        type: flag
-        required: false
-        description: "Hide attachment URLs from content"
-
-    response:
-      parser: custom
-      script: parsers/messages.py
-
+    pipeline:
+      - resolve:
+          name: dm_channel
+          resource: dm_channels
+          input: "{{args.user}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: GET
+          url: /channels/{{steps.dm_channel.id}}/messages
+          params:
+            limit: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$[*]"
+          fields:
+            - name: author
+              from:
+                coalesce:
+                  - "$.author.global_name"
+                  - "$.author.username"
+            - name: content
+              from: "$.content"
+              ops:
+                - append_urls:
+                    path: "$.attachments[*].url"
+                    sep: " "
+            - name: timestamp
+              from: "$.timestamp"
+              transform: timestamp
+            - name: reactions
+              from: "$.reactions[*].emoji.name"
+              ops:
+                - join:
+                    sep: " "
+          post_ops:
+            - reverse
     output:
+      from_step: parsed
       default_fields: [author, content, timestamp, reactions]
       default_format: table
 
   dm-send:
     description: "Send a DM to a user"
-
-    request:
-      builder: custom
-      script: builders/dm_send.py
-
     args:
       user:
         type: string
@@ -236,11 +433,38 @@ commands:
         required: true
         source: [arg, stdin]
         description: "Message content"
-
-    response:
-      parser: custom
-      script: parsers/send.py
-
+    pipeline:
+      - resolve:
+          name: dm_channel
+          resource: dm_channels
+          input: "{{args.user}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: send
+          method: POST
+          url: /channels/{{steps.dm_channel.id}}/messages
+          body:
+            encoding: json
+            template:
+              content: "{{args.message}}"
+      - parse:
+          name: parsed
+          from: send
+          format: json
+          extract: "$"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: content
+              from: "$.content"
+            - name: timestamp
+              from: "$.timestamp"
+              transform: timestamp
+            - name: channel_id
+              from: "$.channel_id"
     output:
+      from_step: parsed
       default_fields: [id, content, timestamp]
       default_format: table

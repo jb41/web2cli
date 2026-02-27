@@ -1,8 +1,9 @@
 meta:
+  spec_version: "0.2"
   name: x
   domain: x.com
   base_url: https://x.com/i/api/graphql
-  version: 0.1.0
+  version: 0.2.0
   description: "X (Twitter) — tweets, profiles"
   author: web2cli-core
   transport: http
@@ -19,129 +20,416 @@ auth:
   methods:
     - type: cookies
       keys: ["auth_token", "ct0"]
+      env_var: WEB2CLI_X_COOKIES
 
 commands:
   tweet:
     description: "Get a single tweet by ID or URL"
-
-    request:
-      builder: custom
-      script: builders/tweet.py
-
     args:
       id:
         type: string
         required: true
         source: [arg, stdin]
-        description: "Tweet ID or URL (e.g. 1600301534863978497 or https://x.com/user/status/123)"
-
-    response:
-      parser: custom
-      script: parsers/tweet.py
-
+        description: "Tweet ID or URL"
+    pipeline:
+      - request:
+          name: fetch
+          provider: x_graphql
+          operation: TweetDetail
+          variables:
+            focalTweetId: "{{args.id}}"
+            with_rux_injections: false
+            rankingMode: Relevance
+            includePromotedContent: true
+            withCommunity: true
+            withQuickPromoteEligibilityTweetFields: true
+            withBirdwatchNotes: true
+            withVoice: true
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.data.threaded_conversation_with_injections_v2.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          fields:
+            - name: id
+              from:
+                coalesce:
+                  - "$.tweet.legacy.id_str"
+                  - "$.legacy.id_str"
+            - name: author
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.screen_name"
+                  - "$.core.user_results.result.core.screen_name"
+                  - "$.tweet.core.user_results.result.legacy.screen_name"
+                  - "$.core.user_results.result.legacy.screen_name"
+              ops:
+                - template:
+                    value: "@{{value}}"
+            - name: name
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.name"
+                  - "$.core.user_results.result.core.name"
+                  - "$.tweet.core.user_results.result.legacy.name"
+                  - "$.core.user_results.result.legacy.name"
+            - name: text
+              from:
+                coalesce:
+                  - "$.tweet.legacy.full_text"
+                  - "$.legacy.full_text"
+            - name: date
+              from:
+                coalesce:
+                  - "$.tweet.legacy.created_at"
+                  - "$.legacy.created_at"
+              transform: x_datetime
+            - name: retweets
+              from:
+                coalesce:
+                  - "$.tweet.legacy.retweet_count"
+                  - "$.legacy.retweet_count"
+            - name: likes
+              from:
+                coalesce:
+                  - "$.tweet.legacy.favorite_count"
+                  - "$.legacy.favorite_count"
+            - name: replies
+              from:
+                coalesce:
+                  - "$.tweet.legacy.reply_count"
+                  - "$.legacy.reply_count"
+            - name: views
+              from:
+                coalesce:
+                  - "$.tweet.views.count"
+                  - "$.views.count"
+            - name: url
+              from:
+                coalesce:
+                  - "$.tweet.legacy.id_str"
+                  - "$.legacy.id_str"
+              template: "https://x.com/i/status/{{value}}"
+          post_ops:
+            - filter_not_empty: text
+            - limit: 1
     output:
+      from_step: parsed
       default_fields: [author, text, date, retweets, likes, replies, views]
       default_format: table
 
   profile:
     description: "Get user profile info"
-
-    request:
-      builder: custom
-      script: builders/profile.py
-
     args:
       user:
         type: string
         required: true
         source: [arg, stdin]
-        description: "Username (e.g. michaloblak or @michaloblak)"
-
-    response:
-      parser: custom
-      script: parsers/profile.py
-
+        description: "Username (e.g. @michaloblak)"
+    pipeline:
+      - request:
+          name: fetch
+          provider: x_graphql
+          operation: UserByScreenName
+          variables:
+            screen_name: "{{args.user}}"
+            withSafetyModeUserFields: true
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.data.user.result"
+          fields:
+            - name: handle
+              from: "$.core.screen_name"
+              ops:
+                - template:
+                    value: "@{{value}}"
+            - name: name
+              from: "$.core.name"
+            - name: bio
+              from: "$.legacy.description"
+            - name: followers
+              from: "$.legacy.followers_count"
+            - name: following
+              from: "$.legacy.friends_count"
+            - name: tweets
+              from: "$.legacy.statuses_count"
+            - name: likes
+              from: "$.legacy.favourites_count"
+            - name: joined
+              from: "$.core.created_at"
+              transform: x_date
+            - name: verified
+              from: "$.is_blue_verified"
+            - name: location
+              from: "$.legacy.location"
     output:
+      from_step: parsed
       default_fields: [handle, name, bio, followers, following, tweets, joined]
       default_format: table
 
   search:
     description: "Search tweets"
-
-    request:
-      builder: custom
-      script: builders/search.py
-
     args:
       query:
         type: string
         required: true
         source: [arg, stdin]
-        description: "Search query (e.g. 'python' or 'from:elonmusk')"
+        description: "Search query"
       limit:
-        type: integer
+        type: int
         required: false
         default: 20
-        description: "Number of results (default 20)"
+        description: "Number of results"
       product:
         type: string
         required: false
         default: Latest
         description: "Search tab: Latest, Top, People, Media"
-
-    response:
-      parser: custom
-      script: parsers/search.py
-
+    pipeline:
+      - request:
+          name: fetch
+          provider: x_graphql
+          operation: SearchTimeline
+          variables:
+            rawQuery: "{{args.query}}"
+            count: "{{args.limit}}"
+            querySource: typed_query
+            product: "{{args.product}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.data.search_by_raw_query.search_timeline.timeline.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          fields:
+            - name: id
+              from:
+                coalesce:
+                  - "$.tweet.legacy.id_str"
+                  - "$.legacy.id_str"
+            - name: author
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.screen_name"
+                  - "$.core.user_results.result.core.screen_name"
+                  - "$.tweet.core.user_results.result.legacy.screen_name"
+                  - "$.core.user_results.result.legacy.screen_name"
+              ops:
+                - template:
+                    value: "@{{value}}"
+            - name: name
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.name"
+                  - "$.core.user_results.result.core.name"
+                  - "$.tweet.core.user_results.result.legacy.name"
+                  - "$.core.user_results.result.legacy.name"
+            - name: text
+              from:
+                coalesce:
+                  - "$.tweet.legacy.full_text"
+                  - "$.legacy.full_text"
+            - name: date
+              from:
+                coalesce:
+                  - "$.tweet.legacy.created_at"
+                  - "$.legacy.created_at"
+              transform: x_datetime
+            - name: retweets
+              from:
+                coalesce:
+                  - "$.tweet.legacy.retweet_count"
+                  - "$.legacy.retweet_count"
+            - name: likes
+              from:
+                coalesce:
+                  - "$.tweet.legacy.favorite_count"
+                  - "$.legacy.favorite_count"
+            - name: replies
+              from:
+                coalesce:
+                  - "$.tweet.legacy.reply_count"
+                  - "$.legacy.reply_count"
+            - name: views
+              from:
+                coalesce:
+                  - "$.tweet.views.count"
+                  - "$.views.count"
+          post_ops:
+            - filter_not_empty: text
     output:
+      from_step: parsed
       default_fields: [author, text, date, likes, retweets, views]
       default_format: table
 
   timeline:
     description: "Home timeline (For you tab)"
-
-    request:
-      builder: custom
-      script: builders/timeline.py
-
     args:
       limit:
-        type: integer
+        type: int
         required: false
         default: 20
-        description: "Number of tweets (default 20)"
-
-    response:
-      parser: custom
-      script: parsers/timeline.py
-
+        description: "Number of tweets"
+    pipeline:
+      - request:
+          name: fetch
+          provider: x_graphql
+          operation: HomeTimeline
+          variables:
+            count: "{{args.limit}}"
+            includePromotedContent: true
+            requestContext: launch
+            withCommunity: true
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.data.home.home_timeline_urt.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          fields:
+            - name: id
+              from:
+                coalesce:
+                  - "$.tweet.legacy.id_str"
+                  - "$.legacy.id_str"
+            - name: author
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.screen_name"
+                  - "$.core.user_results.result.core.screen_name"
+                  - "$.tweet.core.user_results.result.legacy.screen_name"
+                  - "$.core.user_results.result.legacy.screen_name"
+              ops:
+                - template:
+                    value: "@{{value}}"
+            - name: name
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.name"
+                  - "$.core.user_results.result.core.name"
+                  - "$.tweet.core.user_results.result.legacy.name"
+                  - "$.core.user_results.result.legacy.name"
+            - name: text
+              from:
+                coalesce:
+                  - "$.tweet.legacy.full_text"
+                  - "$.legacy.full_text"
+            - name: date
+              from:
+                coalesce:
+                  - "$.tweet.legacy.created_at"
+                  - "$.legacy.created_at"
+              transform: x_datetime
+            - name: retweets
+              from:
+                coalesce:
+                  - "$.tweet.legacy.retweet_count"
+                  - "$.legacy.retweet_count"
+            - name: likes
+              from:
+                coalesce:
+                  - "$.tweet.legacy.favorite_count"
+                  - "$.legacy.favorite_count"
+            - name: replies
+              from:
+                coalesce:
+                  - "$.tweet.legacy.reply_count"
+                  - "$.legacy.reply_count"
+            - name: views
+              from:
+                coalesce:
+                  - "$.tweet.views.count"
+                  - "$.views.count"
+          post_ops:
+            - filter_not_empty: text
     output:
+      from_step: parsed
       default_fields: [author, text, date, likes, retweets, views]
       default_format: table
 
   following:
     description: "Following timeline"
-
-    request:
-      builder: custom
-      script: builders/following.py
-
     args:
       limit:
-        type: integer
+        type: int
         required: false
         default: 20
-        description: "Number of tweets (default 20)"
+        description: "Number of tweets"
       sort:
         type: string
         required: false
         default: recent
         description: "Sort order: recent or popular"
-
-    response:
-      parser: custom
-      script: parsers/timeline.py
-
+    pipeline:
+      - request:
+          name: fetch
+          provider: x_graphql
+          operation: HomeLatestTimeline
+          variables:
+            count: "{{args.limit}}"
+            includePromotedContent: true
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.data.home.home_timeline_urt.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          fields:
+            - name: id
+              from:
+                coalesce:
+                  - "$.tweet.legacy.id_str"
+                  - "$.legacy.id_str"
+            - name: author
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.screen_name"
+                  - "$.core.user_results.result.core.screen_name"
+                  - "$.tweet.core.user_results.result.legacy.screen_name"
+                  - "$.core.user_results.result.legacy.screen_name"
+              ops:
+                - template:
+                    value: "@{{value}}"
+            - name: name
+              from:
+                coalesce:
+                  - "$.tweet.core.user_results.result.core.name"
+                  - "$.core.user_results.result.core.name"
+                  - "$.tweet.core.user_results.result.legacy.name"
+                  - "$.core.user_results.result.legacy.name"
+            - name: text
+              from:
+                coalesce:
+                  - "$.tweet.legacy.full_text"
+                  - "$.legacy.full_text"
+            - name: date
+              from:
+                coalesce:
+                  - "$.tweet.legacy.created_at"
+                  - "$.legacy.created_at"
+              transform: x_datetime
+            - name: retweets
+              from:
+                coalesce:
+                  - "$.tweet.legacy.retweet_count"
+                  - "$.legacy.retweet_count"
+            - name: likes
+              from:
+                coalesce:
+                  - "$.tweet.legacy.favorite_count"
+                  - "$.legacy.favorite_count"
+            - name: replies
+              from:
+                coalesce:
+                  - "$.tweet.legacy.reply_count"
+                  - "$.legacy.reply_count"
+            - name: views
+              from:
+                coalesce:
+                  - "$.tweet.views.count"
+                  - "$.views.count"
+          post_ops:
+            - filter_not_empty: text
     output:
+      from_step: parsed
       default_fields: [author, text, date, likes, retweets, views]
       default_format: table

@@ -12,7 +12,7 @@ class Request:
     params: dict[str, str] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)
     cookies: dict[str, str] = field(default_factory=dict)
-    body: str | dict | None = None
+    body: str | bytes | dict | None = None
     content_type: str | None = None
 
 
@@ -24,6 +24,7 @@ class AdapterMeta:
     version: str
     description: str
     author: str
+    spec_version: str = "0.2"
     transport: str = "http"
     impersonate: str | None = None
     aliases: list[str] = field(default_factory=list)
@@ -47,10 +48,9 @@ class CommandArg:
 class CommandSpec:
     name: str
     description: str
-    request: dict  # raw YAML request section
     args: dict[str, CommandArg]
-    response: dict  # raw YAML response section
     output: dict  # raw YAML output section
+    pipeline: list[dict] = field(default_factory=list)  # v0.2 step pipeline
 
 
 @dataclass
@@ -58,6 +58,7 @@ class AdapterSpec:
     meta: AdapterMeta
     auth: dict | None  # raw YAML auth section, None if no auth
     commands: dict[str, CommandSpec]
+    resources: dict[str, dict] = field(default_factory=dict)  # v0.2 named resources
     adapter_dir: Path | None = None  # path to adapter directory on disk
 
 

@@ -1,13 +1,11 @@
 """CLI entry point for web2cli."""
 
-import asyncio
-import sys
-
 import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
 from web2cli import __version__
+from web2cli.adapter.lint import lint_adapter
 from web2cli.adapter.loader import AdapterNotFound, load_adapter, list_adapters
 from web2cli.auth.manager import (
     check_session,
@@ -17,14 +15,11 @@ from web2cli.auth.manager import (
     parse_cookie_string,
     remove_session,
 )
-from web2cli.executor.builder import build_from_script, build_from_spec
-from web2cli.executor.http import HttpError, execute
+from web2cli.executor.http import HttpError
 from web2cli.output.formatter import format_output
-from web2cli.parser.custom import parse_custom
-from web2cli.parser.html_parser import parse_html
-from web2cli.parser.json_parser import parse_json
 from web2cli.pipe import read_stdin
 from web2cli.types import AdapterSpec, CommandArg, CommandSpec
+from web2cli.v2.engine import execute_v2
 
 err = Console(stderr=True)
 
@@ -43,7 +38,7 @@ class DynamicGroup(TyperGroup):
 
 app = typer.Typer(
     name="web2cli",
-    help="Every website is a command.\n\nUsage: web2cli <domain> <command> [--args] [--format] [--fields] [--raw] [--verbose] [--no-color]",
+    help="Every website is a command.\n\nUsage: web2cli <domain> <command> [--args] [--format] [--fields] [--raw] [--trace] [--verbose] [--no-color]",
     no_args_is_help=True,
     add_completion=False,
     cls=DynamicGroup,
@@ -184,6 +179,7 @@ GLOBAL_FLAGS_HELP = """\
   --sort             Override output sort field (if command doesn't use --sort)
   --sort-by          Override output sort field (always safe)
   --raw              Show raw HTTP response body
+  --trace            Show pipeline step trace (debug)
   --verbose          Show request URL, params, and timing
   --no-color         Disable colors and use ASCII table borders
   --no-header        Omit header row (csv only)"""
@@ -246,6 +242,7 @@ def run_command(
     ),
     fields: str = typer.Option(None, "--fields", help="Comma-separated fields"),
     raw: bool = typer.Option(False, "--raw", help="Show raw HTTP response"),
+    trace: bool = typer.Option(False, "--trace", help="Show pipeline step trace"),
     verbose: bool = typer.Option(False, "--verbose", help="Show request details"),
     no_color: bool = typer.Option(False, "--no-color", help="Disable colored output"),
     no_header: bool = typer.Option(False, "--no-header", help="Omit header row (csv)"),
@@ -306,53 +303,31 @@ def run_command(
     # --- Load session (if adapter supports auth) ---
     session = get_session(adapter.meta.domain, adapter.auth)
 
-    # --- Build + Execute (with retry for custom builders) ---
-    def _build():
-        if cmd_spec.request.get("builder") == "custom":
-            return build_from_script(
-                cmd_spec.request["script"], adapter.adapter_dir, command_args, session
-            )
-        return build_from_spec(cmd_spec, command_args, session, adapter.meta)
-
-    request = _build()
     try:
-        status, resp_headers, body = asyncio.run(
-            execute(request, verbose=verbose, impersonate=adapter.meta.impersonate)
+        v2_result = execute_v2(
+            adapter=adapter,
+            cmd=cmd_spec,
+            args=command_args,
+            session=session,
+            verbose=verbose,
+            trace=trace,
         )
     except HttpError as e:
         err.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
+    except Exception as e:
+        err.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
 
-    # Retry once for custom builders on client/server errors
-    if status >= 400 and cmd_spec.request.get("builder") == "custom":
-        if verbose:
-            err.print(f"[yellow]Got {status}, retrying with _retry=True...[/yellow]")
-        command_args["_retry"] = True
-        request = _build()
-        try:
-            status, resp_headers, body = asyncio.run(
-                execute(request, verbose=verbose, impersonate=adapter.meta.impersonate)
-            )
-        except HttpError as e:
-            err.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
+    if trace:
+        for line in v2_result.trace_lines:
+            err.print(f"[dim]{line}[/dim]")
 
-    # --raw: dump raw response and exit
     if raw:
-        print(body)
+        print(v2_result.last_response_body or "")
         raise typer.Exit(0)
 
-    # --- Parse response ---
-    response_spec = cmd_spec.response
-    if response_spec.get("parser") == "custom":
-        records = parse_custom(
-            response_spec["script"], adapter.adapter_dir,
-            status, resp_headers, body, command_args,
-        )
-    elif response_spec.get("format") == "html":
-        records = parse_html(body, response_spec)
-    else:
-        records = parse_json(body, response_spec)
+    records = v2_result.records
 
     if not records:
         err.print("[yellow]No results.[/yellow]")
@@ -370,9 +345,7 @@ def run_command(
 
     sort_by = global_sort or output_spec.get("sort_by")
     sort_order = output_spec.get("sort_order", "desc")
-    should_sort = bool(sort_by) and (
-        bool(global_sort) or response_spec.get("parser") != "custom"
-    )
+    should_sort = bool(sort_by)
 
     if should_sort and records:
         records.sort(
@@ -446,6 +419,73 @@ def adapters_info(
         err.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
     print_adapter_info(adapter)
+
+
+@adapters_app.command("validate")
+def adapters_validate() -> None:
+    """Validate all available adapters."""
+    had_errors = False
+    adapters = list_adapters()
+    for adapter in adapters:
+        domain = adapter.meta.domain
+        try:
+            load_adapter(domain)
+            err.print(f"[green]ok[/green] {domain}")
+        except Exception as e:
+            had_errors = True
+            err.print(f"[red]error[/red] {domain}: {e}")
+
+    if had_errors:
+        raise typer.Exit(1)
+
+
+@adapters_app.command("lint")
+def adapters_lint(
+    domain: str | None = typer.Argument(None, help="Optional domain or alias"),
+) -> None:
+    """Run semantic lint checks for adapter specs."""
+    had_errors = False
+    adapters: list[AdapterSpec] = []
+
+    if domain:
+        try:
+            adapters = [load_adapter(domain)]
+        except Exception as e:
+            err.print(f"[red]error[/red] {domain}: {e}")
+            raise typer.Exit(1)
+    else:
+        for listed in list_adapters():
+            try:
+                adapters.append(load_adapter(listed.meta.domain))
+            except Exception as e:
+                had_errors = True
+                err.print(f"[red]error[/red] {listed.meta.domain}: {e}")
+
+    for adapter in adapters:
+        issues = lint_adapter(adapter)
+        errors = [i for i in issues if i.level == "error"]
+        warnings = [i for i in issues if i.level == "warning"]
+
+        if errors:
+            had_errors = True
+            err.print(
+                f"[red]error[/red] {adapter.meta.domain}: "
+                f"{len(errors)} error(s), {len(warnings)} warning(s)"
+            )
+        elif warnings:
+            err.print(
+                f"[yellow]warn[/yellow] {adapter.meta.domain}: "
+                f"{len(warnings)} warning(s)"
+            )
+        else:
+            err.print(f"[green]ok[/green] {adapter.meta.domain}")
+
+        for issue in issues:
+            level = "E" if issue.level == "error" else "W"
+            err.print(f"  {level} {issue.path}: {issue.message}")
+
+    if had_errors:
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

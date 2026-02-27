@@ -1,9 +1,10 @@
 meta:
+  spec_version: "0.2"
   name: hn
   domain: news.ycombinator.com
   base_url: https://hacker-news.firebaseio.com/v0
-  version: 0.1.0
-  description: "Hacker News — top stories, new, search, items, saved, upvoted"
+  version: 0.2.0
+  description: "Hacker News — top stories, new, search, item, saved, upvoted"
   author: web2cli-core
   transport: http
   aliases:
@@ -17,113 +18,147 @@ auth:
       keys: ["user"]
       env_var: WEB2CLI_HN_COOKIES
 
-# Tier 1: Public JSON — no auth needed
-
 commands:
   top:
     description: "Get top stories from Hacker News"
-
-    request:
-      method: GET
-      url: "/topstories.json"
-
     args:
       limit:
         type: int
         required: false
         default: 20
-        max: 500
+        max: 200
         description: "Number of stories to show"
-
-    # HN top returns array of IDs — custom parser resolves them
-    response:
-      parser: custom
-      script: parsers/top.py
-
+    pipeline:
+      - request:
+          name: ids
+          method: GET
+          url: /topstories.json
+      - fanout:
+          name: items
+          items_from: "{{steps.ids.json}}"
+          limit: "{{args.limit}}"
+          request:
+            method: GET
+            url: /item/{{item}}.json
+      - parse:
+          name: parsed
+          from: items
+          format: json_list
+          fields:
+            - name: rank
+              from: "$.__index"
+            - name: title
+              from: "$.title"
+            - name: score
+              from: "$.score"
+            - name: author
+              from: "$.by"
+            - name: comments
+              from: "$.descendants"
+            - name: url
+              from: "$.url"
+            - name: id
+              from: "$.id"
+            - name: hn_url
+              from: "$.id"
+              template: "https://news.ycombinator.com/item?id={{value}}"
     output:
+      from_step: parsed
       default_fields: [rank, title, score, comments, url]
       default_format: table
-      sort_by: rank
-      sort_order: asc
 
   new:
     description: "Get newest stories"
-
-    request:
-      method: GET
-      url: "/newstories.json"
-
     args:
       limit:
         type: int
         required: false
         default: 20
-        max: 500
-
-    # Same fan-out pattern as top
-    response:
-      parser: custom
-      script: parsers/top.py
-
+        max: 200
+        description: "Number of stories to show"
+    pipeline:
+      - request:
+          name: ids
+          method: GET
+          url: /newstories.json
+      - fanout:
+          name: items
+          items_from: "{{steps.ids.json}}"
+          limit: "{{args.limit}}"
+          request:
+            method: GET
+            url: /item/{{item}}.json
+      - parse:
+          name: parsed
+          from: items
+          format: json_list
+          fields:
+            - name: rank
+              from: "$.__index"
+            - name: title
+              from: "$.title"
+            - name: score
+              from: "$.score"
+            - name: author
+              from: "$.by"
+            - name: comments
+              from: "$.descendants"
+            - name: url
+              from: "$.url"
+            - name: id
+              from: "$.id"
+            - name: hn_url
+              from: "$.id"
+              template: "https://news.ycombinator.com/item?id={{value}}"
     output:
+      from_step: parsed
       default_fields: [rank, title, score, author, url]
       default_format: table
-      sort_by: rank
-      sort_order: asc
 
   item:
     description: "Get a single HN item (story, comment, job)"
-
-    request:
-      method: GET
-      url: "/item/{{id}}.json"
-
     args:
       id:
         type: string
         required: true
         source: [arg, stdin]
         description: "HN item ID"
-
-    response:
-      format: json
-      extract: "$"
-      fields:
-        - name: id
-          path: "$.id"
-        - name: title
-          path: "$.title"
-        - name: author
-          path: "$.by"
-        - name: score
-          path: "$.score"
-        - name: url
-          path: "$.url"
-        - name: text
-          path: "$.text"
-          transform: strip_html
-        - name: time
-          path: "$.time"
-          transform: timestamp
-        - name: comments
-          path: "$.descendants"
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /item/{{args.id}}.json
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$"
+          fields:
+            - name: id
+              from: "$.id"
+            - name: title
+              from: "$.title"
+            - name: author
+              from: "$.by"
+            - name: score
+              from: "$.score"
+            - name: url
+              from: "$.url"
+            - name: text
+              from: "$.text"
+              transform: strip_html
+            - name: time
+              from: "$.time"
+              transform: timestamp
+            - name: comments
+              from: "$.descendants"
     output:
+      from_step: parsed
       default_fields: [title, author, score, url, time]
       default_format: table
 
   search:
     description: "Search HN stories (via Algolia)"
-
-    # Algolia HN Search — different domain, use absolute URL
-    request:
-      method: GET
-      url: "https://hn.algolia.com/api/v1/search"
-      params:
-        query: "{{query}}"
-        tags: "story"
-        hitsPerPage: "{{limit}}"
-
     args:
       query:
         type: string
@@ -134,95 +169,188 @@ commands:
         type: int
         required: false
         default: 20
-
-    response:
-      format: json
-      extract: "$.hits[*]"
-      fields:
-        - name: title
-          path: "$.title"
-        - name: author
-          path: "$.author"
-        - name: score
-          path: "$.points"
-        - name: comments
-          path: "$.num_comments"
-        - name: url
-          path: "$.url"
-        - name: date
-          path: "$.created_at"
-          transform: timestamp
-        - name: hn_url
-          path: "$.objectID"
-          template: "https://news.ycombinator.com/item?id={{value}}"
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: https://hn.algolia.com/api/v1/search
+          params:
+            query: "{{args.query}}"
+            tags: story
+            hitsPerPage: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.hits[*]"
+          fields:
+            - name: title
+              from: "$.title"
+            - name: author
+              from: "$.author"
+            - name: score
+              from: "$.points"
+            - name: comments
+              from: "$.num_comments"
+            - name: url
+              from: "$.url"
+            - name: date
+              from: "$.created_at"
+              transform: timestamp
+            - name: hn_url
+              from: "$.objectID"
+              template: "https://news.ycombinator.com/item?id={{value}}"
     output:
+      from_step: parsed
       default_fields: [title, score, comments, url]
       default_format: table
-      sort_by: score
-      sort_order: desc
-
-  # Tier 2: Auth-required HTML pages
 
   saved:
     description: "Get saved stories (requires login)"
-
-    request:
-      method: GET
-      url: "https://news.ycombinator.com/favorites?id={{username}}"
-
     args:
       username:
         type: string
         required: true
         description: "HN username"
-
-    response:
-      parser: custom
-      script: parsers/stories_html.py
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: https://news.ycombinator.com/favorites?id={{args.username}}
+      - parse:
+          name: parsed
+          from: fetch
+          format: html
+          extract: "tr.athing"
+          fields:
+            - name: rank
+              path: "span.rank"
+              attribute: text
+              transform: int
+            - name: title
+              path: "span.titleline > a"
+              attribute: text
+            - name: url
+              path: "span.titleline > a"
+              attribute: href
+            - name: score
+              relative: next
+              path: "span.score"
+              attribute: text
+              transform: int
+            - name: author
+              relative: next
+              path: "a.hnuser"
+              attribute: text
+            - name: comments
+              relative: next
+              path: "a:last-of-type"
+              attribute: text
+            - name: age
+              relative: next
+              path: "span.age"
+              attribute: text
     output:
+      from_step: parsed
       default_fields: [title, score, author, comments, url]
       default_format: table
 
   upvoted:
     description: "Get upvoted stories (requires login)"
-
-    request:
-      method: GET
-      url: "https://news.ycombinator.com/upvoted?id={{username}}"
-
     args:
       username:
         type: string
         required: true
         description: "HN username"
-
-    response:
-      parser: custom
-      script: parsers/stories_html.py
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: https://news.ycombinator.com/upvoted?id={{args.username}}
+      - parse:
+          name: parsed
+          from: fetch
+          format: html
+          extract: "tr.athing"
+          fields:
+            - name: rank
+              path: "span.rank"
+              attribute: text
+              transform: int
+            - name: title
+              path: "span.titleline > a"
+              attribute: text
+            - name: url
+              path: "span.titleline > a"
+              attribute: href
+            - name: score
+              relative: next
+              path: "span.score"
+              attribute: text
+              transform: int
+            - name: author
+              relative: next
+              path: "a.hnuser"
+              attribute: text
+            - name: comments
+              relative: next
+              path: "a:last-of-type"
+              attribute: text
+            - name: age
+              relative: next
+              path: "span.age"
+              attribute: text
     output:
+      from_step: parsed
       default_fields: [title, score, author, comments, url]
       default_format: table
 
   submissions:
     description: "Get a user's submissions"
-
-    request:
-      method: GET
-      url: "https://news.ycombinator.com/submitted?id={{username}}"
-
     args:
       username:
         type: string
         required: true
         description: "HN username"
-
-    response:
-      parser: custom
-      script: parsers/stories_html.py
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: https://news.ycombinator.com/submitted?id={{args.username}}
+      - parse:
+          name: parsed
+          from: fetch
+          format: html
+          extract: "tr.athing"
+          fields:
+            - name: rank
+              path: "span.rank"
+              attribute: text
+              transform: int
+            - name: title
+              path: "span.titleline > a"
+              attribute: text
+            - name: url
+              path: "span.titleline > a"
+              attribute: href
+            - name: score
+              relative: next
+              path: "span.score"
+              attribute: text
+              transform: int
+            - name: author
+              relative: next
+              path: "a.hnuser"
+              attribute: text
+            - name: comments
+              relative: next
+              path: "a:last-of-type"
+              attribute: text
+            - name: age
+              relative: next
+              path: "span.age"
+              attribute: text
     output:
+      from_step: parsed
       default_fields: [title, score, comments, age, url]
       default_format: table

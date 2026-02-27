@@ -1,8 +1,9 @@
 meta:
+  spec_version: "0.2"
   name: stackoverflow
   domain: stackoverflow.com
   base_url: https://stackoverflow.com
-  version: 0.1.0
+  version: 0.2.0
   description: "Stack Overflow — search questions, read answers, browse tags"
   author: web2cli-core
   transport: http
@@ -15,23 +16,9 @@ meta:
     Accept-Language: "en-US,en;q=0.9"
     Accept-Encoding: "gzip, deflate, br"
 
-# Tier 2: Public HTML — no auth, server-rendered pages
-# Stack Overflow renders search results as full HTML. No XHR needed.
-# We hit the same URLs your browser hits and parse the HTML response.
-
 commands:
   search:
     description: "Search Stack Overflow questions"
-
-    # Browser URL: https://stackoverflow.com/search?q=python+async&sort=votes
-    request:
-      method: GET
-      url: "/search"
-      params:
-        q: "{{query}}"
-        pagesize: "{{limit}}"
-        tab: "{{sort}}"
-
     args:
       query:
         type: string
@@ -47,85 +34,157 @@ commands:
       sort:
         type: string
         required: false
-        default: "relevance"
+        default: relevance
         enum: [relevance, newest, votes, active]
         description: "Sort order"
-
-    response:
-      format: html
-      extract: "div.s-post-summary"
-      fields:
-        - name: title
-          path: "h3 a.s-link"
-          attribute: text
-        - name: url
-          path: "h3 a.s-link"
-          attribute: href
-          prefix: "https://stackoverflow.com"
-        - name: votes
-          path: "span.s-post-summary--stats-item-number:nth-of-type(1)"
-          attribute: text
-          transform: int
-        - name: answers
-          path: "div.s-post-summary--stats-item:nth-of-type(2) span.s-post-summary--stats-item-number"
-          attribute: text
-          transform: int
-        - name: views
-          path: "div.s-post-summary--stats-item:nth-of-type(3) span.s-post-summary--stats-item-number"
-          attribute: text
-        - name: tags
-          path: "ul.ml0 li a.post-tag"
-          attribute: text
-          collect: true
-          join: ", "
-        - name: excerpt
-          path: "div.s-post-summary--content-excerpt"
-          attribute: text
-          truncate: 80
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /search
+          params:
+            q: "{{args.query}}"
+            pagesize: "{{args.limit}}"
+            tab: "{{args.sort}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: html
+          extract: "div.s-post-summary"
+          fields:
+            - name: title
+              path: "h3 a.s-link"
+              attribute: text
+            - name: url
+              path: "h3 a.s-link"
+              attribute: href
+              prefix: "https://stackoverflow.com"
+            - name: votes
+              path: "span.s-post-summary--stats-item-number:nth-of-type(1)"
+              attribute: text
+              transform: int
+            - name: answers
+              path: "div.s-post-summary--stats-item:nth-of-type(2) span.s-post-summary--stats-item-number"
+              attribute: text
+              transform: int
+            - name: views
+              path: "div.s-post-summary--stats-item:nth-of-type(3) span.s-post-summary--stats-item-number"
+              attribute: text
+            - name: tags
+              path: "ul.ml0 li a.post-tag"
+              attribute: text
+              collect: true
+              join: ", "
+            - name: excerpt
+              path: "div.s-post-summary--content-excerpt"
+              attribute: text
+              truncate: 80
+      - transform:
+          name: sorted
+          from: parsed
+          ops:
+            - sort:
+                by: votes
+                order: desc
     output:
+      from_step: sorted
       default_fields: [title, votes, answers, tags]
       default_format: table
-      sort_by: votes
-      sort_order: desc
 
   question:
     description: "Read a specific question and its top answers"
-
-    # Browser URL: https://stackoverflow.com/questions/12345/slug-here
-    request:
-      method: GET
-      url: "/questions/{{id}}"
-
     args:
       id:
         type: string
         required: true
         source: [arg, stdin]
         description: "Question ID (number from URL)"
-
-    # Question pages are complex — use custom parser
-    response:
-      parser: custom
-      script: parsers/question.py
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /questions/{{args.id}}
+      - parse:
+          name: question
+          from: fetch
+          format: html
+          extract: "body"
+          fields:
+            - name: type
+              path: ".__web2cli_missing__"
+              attribute: text
+              default: question
+            - name: title
+              path: "#question-header h1 a"
+              attribute: text
+            - name: votes
+              path: "#question .js-vote-count"
+              attribute: text
+              transform: int
+            - name: author
+              path: "#question .post-signature:last-child .user-details a"
+              attribute: text
+              default: Unknown
+            - name: tags
+              path: "#question .post-tag"
+              attribute: text
+              collect: true
+              join: ", "
+            - name: body
+              path: "#question .s-prose.js-post-body"
+              attribute: text
+              truncate: 500
+      - parse:
+          name: answers
+          from: fetch
+          format: html
+          extract: "#answers .answer"
+          fields:
+            - name: type
+              path: ".__web2cli_missing__"
+              attribute: text
+              default: answer
+            - name: title
+              path: ".__web2cli_missing__"
+              attribute: text
+              default: ""
+            - name: votes
+              path: ".js-vote-count"
+              attribute: text
+              transform: int
+            - name: author
+              path: ".post-signature:last-child .user-details a"
+              attribute: text
+              default: Unknown
+            - name: tags
+              path: ".__web2cli_missing__"
+              attribute: text
+              default: ""
+            - name: body
+              path: ".s-prose.js-post-body"
+              attribute: text
+              truncate: 500
+      - transform:
+          name: answers_sorted
+          from: answers
+          ops:
+            - sort:
+                by: votes
+                order: desc
+      - transform:
+          name: parsed
+          from: answers_sorted
+          ops:
+            - concat:
+                steps: [question]
+                position: before
     output:
+      from_step: parsed
       default_fields: [type, votes, author, body]
       default_format: plain
-      sort_by: votes
-      sort_order: desc
 
   tagged:
     description: "Browse questions by tag"
-
-    # Browser URL: https://stackoverflow.com/questions/tagged/python?sort=votes
-    request:
-      method: GET
-      url: "/questions/tagged/{{tag}}"
-      params:
-        tab: "{{sort}}"
-        pagesize: "{{limit}}"
-
     args:
       tag:
         type: string
@@ -134,41 +193,55 @@ commands:
       sort:
         type: string
         required: false
-        default: "votes"
+        default: votes
         enum: [newest, active, bounties, unanswered, frequent, votes]
       limit:
         type: int
         required: false
         default: 15
         max: 50
-
-    response:
-      format: html
-      extract: "div.s-post-summary"
-      fields:
-        - name: title
-          path: "h3 a.s-link"
-          attribute: text
-        - name: url
-          path: "h3 a.s-link"
-          attribute: href
-          prefix: "https://stackoverflow.com"
-        - name: votes
-          path: "span.s-post-summary--stats-item-number:nth-of-type(1)"
-          attribute: text
-          transform: int
-        - name: answers
-          path: "div.s-post-summary--stats-item:nth-of-type(2) span.s-post-summary--stats-item-number"
-          attribute: text
-          transform: int
-        - name: tags
-          path: "ul.ml0 li a.post-tag"
-          attribute: text
-          collect: true
-          join: ", "
-
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /questions/tagged/{{args.tag}}
+          params:
+            tab: "{{args.sort}}"
+            pagesize: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: html
+          extract: "div.s-post-summary"
+          fields:
+            - name: title
+              path: "h3 a.s-link"
+              attribute: text
+            - name: url
+              path: "h3 a.s-link"
+              attribute: href
+              prefix: "https://stackoverflow.com"
+            - name: votes
+              path: "span.s-post-summary--stats-item-number:nth-of-type(1)"
+              attribute: text
+              transform: int
+            - name: answers
+              path: "div.s-post-summary--stats-item:nth-of-type(2) span.s-post-summary--stats-item-number"
+              attribute: text
+              transform: int
+            - name: tags
+              path: "ul.ml0 li a.post-tag"
+              attribute: text
+              collect: true
+              join: ", "
+      - transform:
+          name: sorted
+          from: parsed
+          ops:
+            - sort:
+                by: votes
+                order: desc
     output:
+      from_step: sorted
       default_fields: [title, votes, answers, tags]
       default_format: table
-      sort_by: votes
-      sort_order: desc

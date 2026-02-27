@@ -83,6 +83,8 @@ def get_session(domain: str, auth_spec: dict | None = None) -> Session | None:
     """
     # Env var fallback
     if auth_spec:
+        env_cookies: dict[str, str] = {}
+        env_token: str | None = None
         for method in auth_spec.get("methods", []):
             env_var = method.get("env_var")
             if env_var:
@@ -93,20 +95,31 @@ def get_session(domain: str, auth_spec: dict | None = None) -> Session | None:
                     if method_type == "token":
                         token = env_val.strip()
                         if token:
-                            return Session(
-                                domain=domain,
-                                auth_type="token",
-                                data={"token": token},
-                            )
+                            env_token = token
                         continue
 
                     # Default to cookies for backwards compatibility.
                     cookies = parse_cookie_string(env_val)
-                    return Session(
-                        domain=domain,
-                        auth_type="cookies",
-                        data={"cookies": cookies},
-                    )
+                    env_cookies.update(cookies)
+
+        if env_cookies and env_token:
+            return Session(
+                domain=domain,
+                auth_type="cookies+token",
+                data={"cookies": env_cookies, "token": env_token},
+            )
+        if env_cookies:
+            return Session(
+                domain=domain,
+                auth_type="cookies",
+                data={"cookies": env_cookies},
+            )
+        if env_token:
+            return Session(
+                domain=domain,
+                auth_type="token",
+                data={"token": env_token},
+            )
 
     # Stored session
     raw = load_session(domain)

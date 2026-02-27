@@ -74,16 +74,21 @@ def _parse_command_arg(name: str, raw: dict) -> CommandArg:
 
 def _parse_command(name: str, raw: dict) -> CommandSpec:
     """Parse a single command from YAML dict."""
+    if "request" in raw or "response" in raw:
+        raise ValueError(
+            f"Command '{name}': legacy request/response blocks are not supported in "
+            "spec v0.2; use pipeline steps"
+        )
+
     raw_args = raw.get("args", {})
     args = {k: _parse_command_arg(k, v) for k, v in raw_args.items()}
 
     return CommandSpec(
         name=name,
         description=raw.get("description", ""),
-        request=raw.get("request", {}),
         args=args,
-        response=raw.get("response", {}),
         output=raw.get("output", {}),
+        pipeline=raw.get("pipeline", []),
     )
 
 
@@ -96,6 +101,7 @@ def _parse_meta(raw: dict) -> AdapterMeta:
         version=raw.get("version", "0.0.0"),
         description=raw.get("description", ""),
         author=raw.get("author", ""),
+        spec_version=str(raw.get("spec_version", "0.2")),
         transport=raw.get("transport", "http"),
         impersonate=raw.get("impersonate"),
         aliases=raw.get("aliases", []),
@@ -110,7 +116,12 @@ def _parse_adapter(raw: dict) -> AdapterSpec:
     commands_raw = raw.get("commands", {})
     commands = {k: _parse_command(k, v) for k, v in commands_raw.items()}
 
-    return AdapterSpec(meta=meta, auth=auth, commands=commands)
+    return AdapterSpec(
+        meta=meta,
+        auth=auth,
+        commands=commands,
+        resources=raw.get("resources", {}),
+    )
 
 
 def load_adapter(domain_or_alias: str) -> AdapterSpec:

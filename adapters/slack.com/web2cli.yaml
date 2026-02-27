@@ -1,8 +1,9 @@
 meta:
+  spec_version: "0.2"
   name: slack
   domain: slack.com
   base_url: https://slack.com/api
-  version: 0.1.0
+  version: 0.2.0
   description: "Slack — channels, messages, DMs"
   author: web2cli-core
   transport: http
@@ -17,45 +18,159 @@ auth:
   methods:
     - type: cookies
       keys: [d]
+      env_var: WEB2CLI_SLACK_COOKIES
+    - type: token
+      env_var: WEB2CLI_SLACK_TOKEN
+      inject:
+        target: form
+        key: token
+
+resources:
+  users:
+    cache:
+      key: users
+      ttl: 600
+    request:
+      method: POST
+      url: /users.list
+      body:
+        encoding: form
+        template:
+          limit: 200
+    paginate:
+      cursor_param: cursor
+      cursor_location: body
+      cursor_path: "$.response_metadata.next_cursor"
+    response:
+      format: json
+      extract: "$.members[*]"
+      fields:
+        - name: id
+          from: "$.id"
+        - name: name
+          from:
+            coalesce:
+              - "$.profile.display_name"
+              - "$.profile.real_name"
+              - "$.real_name"
+              - "$.name"
+
+  channels:
+    cache:
+      key: channels
+      ttl: 300
+    request:
+      method: POST
+      url: /conversations.list
+      body:
+        encoding: form
+        template:
+          types: public_channel,private_channel
+          limit: 200
+    paginate:
+      cursor_param: cursor
+      cursor_location: body
+      cursor_path: "$.response_metadata.next_cursor"
+    response:
+      format: json
+      extract: "$.channels[*]"
+      fields:
+        - name: id
+          from: "$.id"
+        - name: name
+          from: "$.name"
+        - name: topic
+          from: "$.topic.value"
+        - name: purpose
+          from: "$.purpose.value"
+        - name: num_members
+          from: "$.num_members"
+        - name: is_private
+          from: "$.is_private"
+
+  dm_channels:
+    cache:
+      key: dm_channels
+      ttl: 300
+    request:
+      method: POST
+      url: /conversations.list
+      body:
+        encoding: form
+        template:
+          types: im
+          limit: 200
+    paginate:
+      cursor_param: cursor
+      cursor_location: body
+      cursor_path: "$.response_metadata.next_cursor"
+    response:
+      format: json
+      extract: "$.channels[*]"
+      fields:
+        - name: id
+          from: "$.id"
+        - name: user_id
+          from: "$.user"
+        - name: user_name
+          from: "$.user"
+          ops:
+            - map_lookup:
+                from: "steps.users.map_by_id"
+                default: unknown
 
 commands:
   me:
     description: "Show current user and workspace info"
-
-    request:
-      builder: custom
-      script: builders/me.py
-
-    response:
-      parser: custom
-      script: parsers/me.py
-
+    pipeline:
+      - request:
+          name: fetch
+          method: POST
+          url: /auth.test
+          body:
+            encoding: form
+            template: {}
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$"
+          fields:
+            - name: ok
+              from: "$.ok"
+            - name: user_id
+              from: "$.user_id"
+            - name: user
+              from: "$.user"
+            - name: team_id
+              from: "$.team_id"
+            - name: team
+              from: "$.team"
+            - name: url
+              from: "$.url"
+            - name: error
+              from: "$.error"
     output:
+      from_step: parsed
       default_fields: [user, team, url]
       default_format: table
 
   channels:
     description: "List channels in workspace"
-
-    request:
-      builder: custom
-      script: builders/channels.py
-
-    response:
-      parser: custom
-      script: parsers/channels.py
-
+    pipeline:
+      - resolve:
+          name: channels
+          resource: channels
+          input: null
+          by: name
+          value: id
     output:
+      from_step: channels
       default_fields: [name, topic, num_members]
       default_format: table
 
   messages:
     description: "Get messages from a channel"
-
-    request:
-      builder: custom
-      script: builders/messages.py
-
     args:
       channel:
         type: string
@@ -67,22 +182,65 @@ commands:
         default: 20
         max: 200
         description: "Number of messages to fetch"
-
-    response:
-      parser: custom
-      script: parsers/messages.py
-
+    pipeline:
+      - resolve:
+          name: users
+          resource: users
+          input: null
+          by: id
+          value: name
+      - resolve:
+          name: channel
+          resource: channels
+          input: "{{args.channel}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: POST
+          url: /conversations.history
+          body:
+            encoding: form
+            template:
+              channel: "{{steps.channel.id}}"
+              limit: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.messages[*]"
+          fields:
+            - name: author
+              from: "$.user"
+              ops:
+                - map_lookup:
+                    from: "steps.users.map_by_id"
+                    default: unknown
+            - name: content
+              from: "$.text"
+            - name: timestamp
+              from: "$.ts"
+              transform: timestamp
+            - name: reactions
+              from: "$.reactions[*].name"
+              ops:
+                - join:
+                    sep: " "
+            - name: type
+              from: "$.subtype"
+              default: message
+            - name: ts
+              from: "$.ts"
+          post_ops:
+            - reverse
     output:
+      from_step: parsed
       default_fields: [author, content, timestamp, reactions]
       default_format: table
 
   send:
     description: "Send a message to a channel"
-
-    request:
-      builder: custom
-      script: builders/send.py
-
     args:
       channel:
         type: string
@@ -93,37 +251,67 @@ commands:
         required: true
         source: [arg, stdin]
         description: "Message content"
-
-    response:
-      parser: custom
-      script: parsers/send.py
-
+    pipeline:
+      - resolve:
+          name: channel
+          resource: channels
+          input: "{{args.channel}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: send
+          method: POST
+          url: /chat.postMessage
+          body:
+            encoding: form
+            template:
+              channel: "{{steps.channel.id}}"
+              text: "{{args.message}}"
+      - parse:
+          name: parsed
+          from: send
+          format: json
+          extract: "$"
+          fields:
+            - name: ok
+              from: "$.ok"
+            - name: channel
+              from: "$.channel"
+            - name: timestamp
+              from: "$.message.ts"
+              transform: timestamp
+            - name: content
+              from: "$.message.text"
+            - name: error
+              from: "$.error"
     output:
+      from_step: parsed
       default_fields: [ok, channel, timestamp]
       default_format: table
 
   dm:
     description: "List DM conversations"
-
-    request:
-      builder: custom
-      script: builders/dm.py
-
-    response:
-      parser: custom
-      script: parsers/dm.py
-
+    pipeline:
+      - resolve:
+          name: users
+          resource: users
+          input: null
+          by: id
+          value: name
+      - resolve:
+          name: dm_list
+          resource: dm_channels
+          input: null
+          by: user_name
+          value: id
     output:
-      default_fields: [user, user_id]
+      from_step: dm_list
+      default_fields: [user_name, user_id]
       default_format: table
 
   dm-messages:
     description: "Get messages from a DM conversation"
-
-    request:
-      builder: custom
-      script: builders/dm_messages.py
-
     args:
       user:
         type: string
@@ -135,22 +323,65 @@ commands:
         default: 20
         max: 200
         description: "Number of messages to fetch"
-
-    response:
-      parser: custom
-      script: parsers/messages.py
-
+    pipeline:
+      - resolve:
+          name: users
+          resource: users
+          input: null
+          by: id
+          value: name
+      - resolve:
+          name: dm_channel
+          resource: dm_channels
+          input: "{{args.user}}"
+          by: user_name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: POST
+          url: /conversations.history
+          body:
+            encoding: form
+            template:
+              channel: "{{steps.dm_channel.id}}"
+              limit: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.messages[*]"
+          fields:
+            - name: author
+              from: "$.user"
+              ops:
+                - map_lookup:
+                    from: "steps.users.map_by_id"
+                    default: unknown
+            - name: content
+              from: "$.text"
+            - name: timestamp
+              from: "$.ts"
+              transform: timestamp
+            - name: reactions
+              from: "$.reactions[*].name"
+              ops:
+                - join:
+                    sep: " "
+            - name: type
+              from: "$.subtype"
+              default: message
+            - name: ts
+              from: "$.ts"
+          post_ops:
+            - reverse
     output:
+      from_step: parsed
       default_fields: [author, content, timestamp, reactions]
       default_format: table
 
   dm-send:
     description: "Send a DM to a user"
-
-    request:
-      builder: custom
-      script: builders/dm_send.py
-
     args:
       user:
         type: string
@@ -161,11 +392,47 @@ commands:
         required: true
         source: [arg, stdin]
         description: "Message content"
-
-    response:
-      parser: custom
-      script: parsers/send.py
-
+    pipeline:
+      - resolve:
+          name: users
+          resource: users
+          input: null
+          by: id
+          value: name
+      - resolve:
+          name: dm_channel
+          resource: dm_channels
+          input: "{{args.user}}"
+          by: user_name
+          value: id
+          match: ci_equals
+      - request:
+          name: send
+          method: POST
+          url: /chat.postMessage
+          body:
+            encoding: form
+            template:
+              channel: "{{steps.dm_channel.id}}"
+              text: "{{args.message}}"
+      - parse:
+          name: parsed
+          from: send
+          format: json
+          extract: "$"
+          fields:
+            - name: ok
+              from: "$.ok"
+            - name: channel
+              from: "$.channel"
+            - name: timestamp
+              from: "$.message.ts"
+              transform: timestamp
+            - name: content
+              from: "$.message.text"
+            - name: error
+              from: "$.error"
     output:
+      from_step: parsed
       default_fields: [ok, channel, timestamp]
       default_format: table
