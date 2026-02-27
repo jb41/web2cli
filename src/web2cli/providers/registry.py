@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from web2cli.v2.providers.base import Provider
+from web2cli.providers.base import Provider
 
 _PROVIDERS: dict[str, Provider] = {}
 _BUILTINS_REGISTERED = False
@@ -20,7 +20,7 @@ def _register_builtins_once() -> None:
         return
 
     # Import side effect registers built-ins.
-    from web2cli.v2.providers import x_graphql  # noqa: F401
+    from web2cli.providers import x_graphql  # noqa: F401
 
     _BUILTINS_REGISTERED = True
 

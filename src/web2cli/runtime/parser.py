@@ -1,4 +1,4 @@
-"""Parser v0.2 helpers for declarative pipeline steps."""
+"""Parser helpers for declarative pipeline steps."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import jmespath
 
 from web2cli.parser.html_parser import parse_html
 from web2cli.parser.transforms import apply_transform
-from web2cli.v2.template import render_string, resolve_expr
+from web2cli.runtime.template import render_string, resolve_expr
 
 
 def _jmespath_expr(path: str) -> str:

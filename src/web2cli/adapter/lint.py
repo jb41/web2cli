@@ -1,4 +1,4 @@
-"""Semantic adapter linter for v0.2 specs."""
+"""Semantic adapter linter."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from web2cli.types import AdapterSpec
-from web2cli.v2.providers import get_provider
+from web2cli.providers import get_provider
 
 _TPL_RE = re.compile(r"\{\{([^{}]+)\}\}")
 

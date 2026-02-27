@@ -1,4 +1,4 @@
-"""Template rendering helpers for v0.2 specs."""
+"""Template rendering helpers for adapter specs."""
 
 from __future__ import annotations
 

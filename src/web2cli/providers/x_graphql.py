@@ -1,4 +1,4 @@
-"""X.com GraphQL provider for v0.2 adapters."""
+"""X.com GraphQL provider for adapter runtime."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from x_client_transaction import ClientTransaction
 from x_client_transaction.utils import get_ondemand_file_url
 
 from web2cli.types import AdapterSpec, Request, Session
-from web2cli.v2.providers.base import Provider
-from web2cli.v2.providers.registry import register_provider
-from web2cli.v2.template import render_value
+from web2cli.providers.base import Provider
+from web2cli.providers.registry import register_provider
+from web2cli.runtime.template import render_value
 
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -107,7 +107,7 @@ FIELD_TOGGLES = {
 }
 
 CACHE_DIR = Path.home() / ".web2cli" / "cache" / "x.com"
-CACHE_FILE = CACHE_DIR / "query_ids_v2.json"
+CACHE_FILE = CACHE_DIR / "query_ids.json"
 _ct: ClientTransaction | None = None
 
 

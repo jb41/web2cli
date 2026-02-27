@@ -1,4 +1,4 @@
-"""v0.2 command pipeline execution engine."""
+"""Command pipeline execution engine."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ import jmespath
 from web2cli.executor.http import HttpError, execute
 from web2cli.parser.custom import parse_custom
 from web2cli.types import AdapterSpec, CommandSpec, Request, Session
-from web2cli.v2.cache import load_cache, save_cache
-from web2cli.v2.parser import apply_post_ops, parse_records
-from web2cli.v2.providers import get_provider
-from web2cli.v2.template import render_value
+from web2cli.providers import get_provider
+from web2cli.runtime.cache import load_cache, save_cache
+from web2cli.runtime.parser import apply_post_ops, parse_records
+from web2cli.runtime.template import render_value
 
 
 @dataclass
@@ -572,7 +572,7 @@ def _records_from_output(output: Any) -> list[dict[str, Any]]:
     return []
 
 
-def execute_v2(
+def execute_command(
     adapter: AdapterSpec,
     cmd: CommandSpec,
     args: dict[str, Any],
@@ -580,7 +580,7 @@ def execute_v2(
     verbose: bool = False,
     trace: bool = False,
 ) -> ExecutionResult:
-    """Execute a v0.2 command pipeline."""
+    """Execute a command pipeline."""
     trace_lines: list[str] = []
 
     def _trace(msg: str) -> None:

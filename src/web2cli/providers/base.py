@@ -1,4 +1,4 @@
-"""Provider base class for v0.2 request generation."""
+"""Provider base class for request generation."""
 
 from __future__ import annotations
 
@@ -20,4 +20,3 @@ class Provider:
         session: Session | None,
     ) -> Request:
         raise NotImplementedError
-

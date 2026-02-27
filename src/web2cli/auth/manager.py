@@ -98,7 +98,7 @@ def get_session(domain: str, auth_spec: dict | None = None) -> Session | None:
                             env_token = token
                         continue
 
-                    # Default to cookies for backwards compatibility.
+                    # Default to cookies when method type is omitted.
                     cookies = parse_cookie_string(env_val)
                     env_cookies.update(cookies)
 

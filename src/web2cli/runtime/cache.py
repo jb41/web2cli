@@ -1,4 +1,4 @@
-"""Small file cache for v0.2 resources."""
+"""Small file cache for runtime resources."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ BASE_CACHE_DIR = Path.home() / ".web2cli" / "cache"
 
 def _cache_path(domain: str, key: str) -> Path:
     digest = hashlib.sha1(key.encode()).hexdigest()  # nosec: non-crypto use
-    return BASE_CACHE_DIR / domain / "v2" / f"{digest}.json"
+    return BASE_CACHE_DIR / domain / "runtime" / f"{digest}.json"
 
 
 def load_cache(domain: str, key: str, ttl: int | None = None) -> Any | None:
@@ -40,4 +40,3 @@ def save_cache(domain: str, key: str, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = {"ts": time.time(), "payload": payload}
     path.write_text(json.dumps(doc))
-

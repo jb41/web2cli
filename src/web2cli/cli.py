@@ -19,7 +19,7 @@ from web2cli.executor.http import HttpError
 from web2cli.output.formatter import format_output
 from web2cli.pipe import read_stdin
 from web2cli.types import AdapterSpec, CommandArg, CommandSpec
-from web2cli.v2.engine import execute_v2
+from web2cli.runtime.engine import execute_command
 
 err = Console(stderr=True)
 
@@ -304,7 +304,7 @@ def run_command(
     session = get_session(adapter.meta.domain, adapter.auth)
 
     try:
-        v2_result = execute_v2(
+        run_result = execute_command(
             adapter=adapter,
             cmd=cmd_spec,
             args=command_args,
@@ -320,14 +320,14 @@ def run_command(
         raise typer.Exit(1)
 
     if trace:
-        for line in v2_result.trace_lines:
+        for line in run_result.trace_lines:
             err.print(f"[dim]{line}[/dim]")
 
     if raw:
-        print(v2_result.last_response_body or "")
+        print(run_result.last_response_body or "")
         raise typer.Exit(0)
 
-    records = v2_result.records
+    records = run_result.records
 
     if not records:
         err.print("[yellow]No results.[/yellow]")
