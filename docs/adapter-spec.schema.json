@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://web2cli.dev/schemas/adapter-spec-0.2.json",
+  "title": "web2cli Adapter Spec 0.2",
+  "type": "object",
+  "required": ["meta", "commands"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["spec_version", "name", "domain", "base_url"],
+      "properties": {
+        "spec_version": {
+          "type": "string",
+          "pattern": "^0\\.2(\\..*)?$"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "domain": { "type": "string", "minLength": 1 },
+        "base_url": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "transport": { "type": "string" },
+        "impersonate": { "type": "string" },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "default_headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["cookies", "token"] },
+              "keys": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "env_var": { "type": "string" },
+              "inject": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "enum": ["header", "query", "cookie", "form"]
+                  },
+                  "key": { "type": "string" },
+                  "prefix": { "type": "string" },
+                  "cookie": { "type": "string" }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "commands": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/command"
+      }
+    }
+  },
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "properties": {
+        "cache": {
+          "type": "object",
+          "properties": {
+            "key": { "type": ["string", "number", "boolean"] },
+            "ttl": { "type": ["integer", "string"] }
+          },
+          "additionalProperties": true
+        },
+        "request": { "$ref": "#/$defs/requestStep" },
+        "paginate": {
+          "type": "object",
+          "properties": {
+            "cursor_param": { "type": "string" },
+            "cursor_path": { "type": "string" },
+            "cursor_location": {
+              "type": "string",
+              "enum": ["params", "body"]
+            }
+          },
+          "additionalProperties": true
+        },
+        "response": { "$ref": "#/$defs/parseStep" },
+        "parse": { "$ref": "#/$defs/parseStep" }
+      },
+      "additionalProperties": true
+    },
+    "command": {
+      "type": "object",
+      "required": ["pipeline", "output"],
+      "properties": {
+        "description": { "type": "string" },
+        "args": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/arg" }
+        },
+        "pipeline": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/pipelineStep" }
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "from_step": { "type": "string" },
+            "default_fields": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "default_format": {
+              "type": "string",
+              "enum": ["table", "json", "csv", "plain", "md"]
+            },
+            "sort_by": { "type": "string" },
+            "sort_order": { "type": "string", "enum": ["asc", "desc"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "arg": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "int", "float", "bool", "flag", "string[]"]
+        },
+        "required": { "type": "boolean" },
+        "default": {},
+        "description": { "type": "string" },
+        "source": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["arg", "stdin"] }
+        },
+        "enum": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "min": { "type": ["number", "integer"] },
+        "max": { "type": ["number", "integer"] }
+      },
+      "additionalProperties": true
+    },
+    "pipelineStep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["request"],
+          "properties": { "request": { "$ref": "#/$defs/requestStep" } },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["resolve"],
+          "properties": {
+            "resolve": {
+              "type": "object",
+              "required": ["resource"],
+              "properties": {
+                "name": { "type": "string" },
+                "resource": { "type": "string" },
+                "input": {},
+                "by": { "type": "string" },
+                "value": { "type": "string" },
+                "match": { "type": "string", "enum": ["equals", "ci_equals", "contains"] }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["fanout"],
+          "properties": {
+            "fanout": {
+              "type": "object",
+              "required": ["request"],
+              "properties": {
+                "name": { "type": "string" },
+                "items_from": {},
+                "limit": {},
+                "request": { "$ref": "#/$defs/requestStep" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["parse"],
+          "properties": { "parse": { "$ref": "#/$defs/parseStep" } },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["transform"],
+          "properties": {
+            "transform": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "from": { "type": "string" },
+                "ops": {
+                  "type": "array",
+                  "items": {}
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "requestStep": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "method": { "type": "string" },
+        "url": {},
+        "params": { "type": "object", "additionalProperties": {} },
+        "headers": { "type": "object", "additionalProperties": {} },
+        "cookies": { "type": "object", "additionalProperties": {} },
+        "provider": { "type": "string" },
+        "operation": { "type": "string" },
+        "variables": { "type": "object", "additionalProperties": {} },
+        "features": {},
+        "field_toggles": {},
+        "use_transaction": { "type": "boolean" },
+        "body": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "encoding": { "type": "string", "enum": ["json", "form", "text", "bytes"] },
+                "template": {},
+                "content_type": { "type": "string" }
+              },
+              "additionalProperties": true
+            },
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array" },
+            { "type": "object" }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "parseStep": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "from": { "type": "string" },
+        "parser": { "type": "string" },
+        "script": { "type": "string" },
+        "format": { "type": "string", "enum": ["json", "json_list", "html"] },
+        "extract": { "type": "string" },
+        "item_ops": {
+          "type": "array",
+          "items": {}
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "from": {},
+              "path": { "type": "string" },
+              "attribute": { "type": "string" },
+              "collect": { "type": "boolean" },
+              "join": { "type": "string" },
+              "prefix": { "type": "string" },
+              "relative": { "type": "string", "enum": ["self", "next", "parent"] },
+              "template": { "type": "string" },
+              "default": {},
+              "transform": { "type": "string" },
+              "ops": { "type": "array", "items": {} },
+              "truncate": { "type": "integer" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "post_ops": {
+          "type": "array",
+          "items": {}
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

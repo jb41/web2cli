@@ -34,6 +34,38 @@ The keywords `MUST`, `SHOULD`, and `MAY` in this document are normative:
 
 ---
 
+## LLM Authoring Rules
+
+These rules are optimized for agent-generated adapters.
+
+`MUST`:
+
+- Generate adapters that are fully declarative YAML by default.
+- Define explicit step names for non-trivial pipelines (especially when referenced by `from` or templates).
+- Keep `output.from_step` aligned with the final intended record-producing step.
+- Run `web2cli adapters validate` and `web2cli adapters lint` after generating changes.
+- Run at least one real command using `--trace` during debugging.
+
+`SHOULD`:
+
+- Reuse `resources` for repeated name -> id lookups.
+- Keep field names stable and user-facing (`author`, `text`, `date`, `url`, etc.).
+- Prefer built-in ops/transforms over custom parser scripts.
+- Use `coalesce` when upstream payloads are known to vary by shape.
+
+`SHOULD NOT`:
+
+- Add custom parser scripts for simple flatten/filter/map operations.
+- Encode long business logic in templates.
+- Duplicate identical parse blocks across commands when shared resources/steps can be used.
+
+Related docs:
+
+- `docs/llm-adapter-playbook.md`
+- `docs/adapter-spec.schema.json`
+
+---
+
 ## File Structure
 
 ```text
@@ -52,6 +84,10 @@ auth:
 resources:
 commands:
 ```
+
+Machine-readable schema:
+
+- `docs/adapter-spec.schema.json`
 
 ---
 
