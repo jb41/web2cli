@@ -46,6 +46,61 @@ Key docs for contributors:
 - `docs/llm-adapter-playbook.md` - adapter authoring workflow for LLM agents
 - `docs/adapter-spec.schema.json` - machine-readable schema for quick structural checks
 
+## Built-in Adapters
+Current built-in adapters and actions:
+
+### discord.com (`dc`, `discord`)
+- `me` - Show current user info
+- `servers` - List your Discord servers (guilds)
+- `channels` - List channels in a server
+- `messages` - Get messages from a channel
+- `send` - Send a message to a channel
+- `dm` - List DM conversations
+- `dm-messages` - Get messages from a DM conversation
+- `dm-send` - Send a DM to a user
+
+### news.ycombinator.com (`hn`)
+- `top` - Get top stories from Hacker News
+- `new` - Get newest stories
+- `item` - Get a single HN item (story, comment, job)
+- `search` - Search HN stories (via Algolia)
+- `saved` - Get saved stories (requires login)
+- `upvoted` - Get upvoted stories (requires login)
+- `submissions` - Get a user's submissions
+
+### reddit.com (`reddit`)
+- `posts` - List posts from a subreddit
+- `thread` - Get a thread with comments
+- `search` - Search posts in a subreddit
+
+### slack.com (`slack`)
+- `me` - Show current user and workspace info
+- `channels` - List channels in workspace
+- `messages` - Get messages from a channel
+- `send` - Send a message to a channel
+- `dm` - List DM conversations
+- `dm-messages` - Get messages from a DM conversation
+- `dm-send` - Send a DM to a user
+
+### stackoverflow.com (`so`)
+- `search` - Search Stack Overflow questions
+- `question` - Read a specific question and its top answers
+- `tagged` - Browse questions by tag
+
+### x.com (`x`, `twitter`)
+- `tweet` - Get a single tweet by ID or URL
+- `profile` - Get user profile info
+- `search` - Search tweets
+- `timeline` - Home timeline (For you tab)
+- `following` - Following timeline
+
+To inspect adapter details from CLI:
+
+```bash
+web2cli adapters list
+web2cli adapters info <domain-or-alias>
+```
+
 ## Debugging and Quality
 
 ```bash
