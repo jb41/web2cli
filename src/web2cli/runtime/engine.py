@@ -579,6 +579,7 @@ def execute_command(
     session: Session | None,
     verbose: bool = False,
     trace: bool = False,
+    no_truncate: bool = False,
 ) -> ExecutionResult:
     """Execute a command pipeline."""
     trace_lines: list[str] = []
@@ -591,6 +592,9 @@ def execute_command(
         "args": dict(args),
         "auth": session.data if session else {},
         "steps": {},
+        "flags": {
+            "no_truncate": no_truncate,
+        },
     }
 
     pipeline = list(cmd.pipeline or [])

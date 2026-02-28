@@ -90,6 +90,13 @@ def _resolve_field_source(field_spec: dict, item: Any, ctx: dict[str, Any]) -> A
     return source
 
 
+def _disable_truncate(ctx: dict[str, Any]) -> bool:
+    flags = ctx.get("flags")
+    if not isinstance(flags, dict):
+        return False
+    return bool(flags.get("no_truncate"))
+
+
 def _apply_ops(value: Any, field_spec: dict, item: Any, ctx: dict[str, Any]) -> Any:
     ops: list[Any] = []
     transform = field_spec.get("transform")
@@ -100,7 +107,7 @@ def _apply_ops(value: Any, field_spec: dict, item: Any, ctx: dict[str, Any]) -> 
 
     for op in ops:
         if isinstance(op, str):
-            value = apply_transform(value, op)
+            value = apply_transform(value, op, disable_truncate=_disable_truncate(ctx))
             continue
 
         if not isinstance(op, dict) or len(op) != 1:
@@ -329,7 +336,7 @@ def parse_records(source: Any, parse_spec: dict, ctx: dict[str, Any]) -> list[di
 
     if fmt == "html":
         body = source.get("body", "") if isinstance(source, dict) else str(source or "")
-        records = parse_html(body, parse_spec)
+        records = parse_html(body, parse_spec, disable_truncate=_disable_truncate(ctx))
         return apply_post_ops(records, parse_spec.get("post_ops"), ctx)
 
     if fmt not in {"json", "json_list"}:

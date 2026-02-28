@@ -179,6 +179,7 @@ GLOBAL_FLAGS_HELP = """\
 [bold]Global flags:[/bold]
   --format, -f       Output format: table, json, csv, plain, md
   --fields           Comma-separated list of fields to display
+  --no-truncate      Disable all parser-level truncate rules
   --sort             Override output sort field (if command doesn't use --sort)
   --sort-by          Override output sort field (always safe)
   --raw              Show raw HTTP response body
@@ -423,6 +424,11 @@ def run_command(
         None, "--format", "-f", help="Output format (table|json|csv|plain)"
     ),
     fields: str = typer.Option(None, "--fields", help="Comma-separated fields"),
+    no_truncate: bool = typer.Option(
+        False,
+        "--no-truncate",
+        help="Disable parser-level truncation rules",
+    ),
     raw: bool = typer.Option(False, "--raw", help="Show raw HTTP response"),
     trace: bool = typer.Option(False, "--trace", help="Show pipeline step trace"),
     verbose: bool = typer.Option(False, "--verbose", help="Show request details"),
@@ -505,6 +511,7 @@ def run_command(
             session=session,
             verbose=verbose,
             trace=trace,
+            no_truncate=no_truncate,
         )
     except HttpError as e:
         err.print(f"[red]{e}[/red]")

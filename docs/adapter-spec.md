@@ -466,6 +466,7 @@ Global CLI flags still apply:
 
 - `--format`
 - `--fields`
+- `--no-truncate` (disable parser-level truncation rules like `truncate` / `truncate:N`)
 - `--sort` / `--sort-by`
 - `--limit`
 - `--raw`

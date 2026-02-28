@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 
 
-def apply_transform(value, transform: str):
+def apply_transform(value, transform: str, disable_truncate: bool = False):
     """Apply a named transform to a value."""
     if value is None:
         return value
@@ -68,6 +68,8 @@ def apply_transform(value, transform: str):
         return full
 
     if transform.startswith("truncate:"):
+        if disable_truncate:
+            return value
         try:
             n = int(transform.split(":")[1])
             s = str(value)

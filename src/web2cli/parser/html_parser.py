@@ -10,7 +10,7 @@ from web2cli.parser.transforms import apply_transform
 _BLOCK_SIGNALS = ("human verification", "captcha", "access denied", "just a moment")
 
 
-def parse_html(body: str, response_spec: dict) -> list[dict]:
+def parse_html(body: str, response_spec: dict, disable_truncate: bool = False) -> list[dict]:
     """Parse HTML response using CSS selectors from spec."""
     tree = HTMLParser(body)
 
@@ -71,11 +71,17 @@ def parse_html(body: str, response_spec: dict) -> list[dict]:
             # Apply transform
             transform = field_spec.get("transform")
             if transform:
-                value = apply_transform(value, transform)
+                value = apply_transform(value, transform, disable_truncate=disable_truncate)
 
             # Apply truncation (display hint)
             truncate = field_spec.get("truncate")
-            if truncate and value and isinstance(value, str) and len(value) > truncate:
+            if (
+                not disable_truncate
+                and truncate
+                and value
+                and isinstance(value, str)
+                and len(value) > truncate
+            ):
                 value = value[:truncate] + "..."
 
             # Default fallback
