@@ -24,6 +24,13 @@ auth:
       inject:
         target: form
         key: token
+      capture:
+        from: request.form
+        key: token
+        match:
+          host: slack.com
+          path_regex: "^/api/"
+          method: POST
 
 resources:
   users:

@@ -13,6 +13,8 @@ _TPL_RE = re.compile(r"\{\{([^{}]+)\}\}")
 
 _VALID_AUTH_TYPES = {"cookies", "token"}
 _VALID_AUTH_INJECT_TARGETS = {"header", "query", "cookie", "form"}
+_VALID_AUTH_CAPTURE_SOURCES = {"request.header", "request.form"}
+_VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 _VALID_BODY_ENCODINGS = {"json", "form", "text", "bytes"}
 _VALID_PARSE_FORMATS = {"json", "json_list", "html"}
 _VALID_FIELD_OPS = {"map_lookup", "regex_replace", "append_urls", "join", "add", "template"}
@@ -77,22 +79,79 @@ def _lint_auth(spec: AdapterSpec, issues: list[LintIssue]) -> None:
             _err(issues, f"{path}.type", f"unsupported type '{mtype}'")
 
         inject = method.get("inject")
-        if inject is None:
+        if inject is not None:
+            if not isinstance(inject, dict):
+                _err(issues, f"{path}.inject", "must be an object")
+            else:
+                target = str(inject.get("target", "")).lower()
+                if target not in _VALID_AUTH_INJECT_TARGETS:
+                    _err(
+                        issues,
+                        f"{path}.inject.target",
+                        f"unsupported target '{target}', expected one of "
+                        f"{sorted(_VALID_AUTH_INJECT_TARGETS)}",
+                    )
+                if not inject.get("key"):
+                    _err(issues, f"{path}.inject.key", "is required when inject is set")
+
+        capture = method.get("capture")
+        if capture is None:
             continue
-        if not isinstance(inject, dict):
-            _err(issues, f"{path}.inject", "must be an object")
+        if not isinstance(capture, dict):
+            _err(issues, f"{path}.capture", "must be an object")
+            continue
+        if mtype != "token":
+            _err(issues, f"{path}.capture", "is supported only for token auth methods")
             continue
 
-        target = str(inject.get("target", "")).lower()
-        if target not in _VALID_AUTH_INJECT_TARGETS:
+        source = str(capture.get("from", "")).lower()
+        if source not in _VALID_AUTH_CAPTURE_SOURCES:
             _err(
                 issues,
-                f"{path}.inject.target",
-                f"unsupported target '{target}', expected one of "
-                f"{sorted(_VALID_AUTH_INJECT_TARGETS)}",
+                f"{path}.capture.from",
+                f"unsupported source '{source}', expected one of "
+                f"{sorted(_VALID_AUTH_CAPTURE_SOURCES)}",
             )
-        if not inject.get("key"):
-            _err(issues, f"{path}.inject.key", "is required when inject is set")
+        key = capture.get("key")
+        if not isinstance(key, str) or not key.strip():
+            _err(issues, f"{path}.capture.key", "is required")
+
+        match = capture.get("match")
+        if match is not None and not isinstance(match, dict):
+            _err(issues, f"{path}.capture.match", "must be an object")
+            continue
+        if isinstance(match, dict):
+            host = match.get("host")
+            if host is not None and (not isinstance(host, str) or not host.strip()):
+                _err(issues, f"{path}.capture.match.host", "must be a non-empty string")
+
+            path_regex = match.get("path_regex")
+            if path_regex is not None:
+                if not isinstance(path_regex, str) or not path_regex.strip():
+                    _err(
+                        issues,
+                        f"{path}.capture.match.path_regex",
+                        "must be a non-empty string",
+                    )
+                else:
+                    try:
+                        re.compile(path_regex)
+                    except re.error:
+                        _err(
+                            issues,
+                            f"{path}.capture.match.path_regex",
+                            "must be a valid regex",
+                        )
+
+            method_name = match.get("method")
+            if method_name is not None:
+                normalized_method = str(method_name).upper()
+                if normalized_method not in _VALID_HTTP_METHODS:
+                    _err(
+                        issues,
+                        f"{path}.capture.match.method",
+                        f"unsupported HTTP method '{method_name}'",
+                    )
 
 
 def _lint_resources_structure(spec: AdapterSpec, issues: list[LintIssue]) -> None:

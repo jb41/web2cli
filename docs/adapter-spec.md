@@ -17,7 +17,7 @@ Main principles:
 1. Pipeline-based command execution (`resolve -> request -> fanout -> parse -> transform`)
 2. Reusable named resources (with cache + optional pagination)
 3. Explicit body encodings (`json`, `form`, `text`, `bytes`)
-4. Auth injection policy in adapter spec
+4. Auth injection and browser-capture policy in adapter spec
 5. Provider plugins for protocol-heavy sites (e.g. `x_graphql`)
 
 Custom Python is still an escape hatch, not the default.
@@ -171,6 +171,14 @@ auth:
         target: form      # header | query | form | cookie
         key: token
         prefix: ""        # optional
+      capture:
+        from: request.form    # request.header | request.form
+        key: token
+        match:
+          host: slack.com
+          path_regex: "^/api/"
+          method: POST        # optional
+        strip_prefix: ""      # optional
 ```
 
 Notes:
@@ -178,6 +186,14 @@ Notes:
 - Multiple methods can be combined (e.g. cookies + token from env vars).
 - `inject` controls where auth value is written into the request.
 - If no `inject` is given for token auth, runtime defaults to `Authorization` header.
+- `capture` is used by `web2cli login <domain> --browser` to extract token values
+  from browser network requests.
+- `capture.from: request.header` reads request headers, `request.form` reads form bodies
+  (`application/x-www-form-urlencoded` and `multipart/form-data`).
+- If multiple token `capture` rules are declared, runtime uses the first rule (in method order)
+  that yields a non-empty value.
+- Browser login succeeds only after all required cookie keys and configured token capture
+  values are collected.
 
 ---
 
@@ -482,7 +498,7 @@ Adapter quality checks are split into two commands:
 | Command | Scope | Fails on |
 |---|---|---|
 | `web2cli adapters validate` | Structural checks | invalid schema shape, unsupported arg types, missing pipeline, missing scripts for custom parser |
-| `web2cli adapters lint` | Semantic checks | unknown step refs, unknown provider, invalid ops/transforms, bad template references, invalid auth inject target |
+| `web2cli adapters lint` | Semantic checks | unknown step refs, unknown provider, invalid ops/transforms, bad template references, invalid auth inject/capture config |
 
 Use both in CI:
 

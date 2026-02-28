@@ -4,6 +4,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from typer.core import TyperGroup
 
 from web2cli import __version__
@@ -17,6 +18,13 @@ from web2cli.auth.manager import (
     parse_cookie_string,
     remove_session,
 )
+from web2cli.auth.browser_login import (
+    BrowserLoginCancelled,
+    BrowserLoginError,
+    TokenCaptureRule,
+    capture_auth_with_browser,
+)
+from web2cli.auth.store import SESSIONS_DIR
 from web2cli.executor.http import HttpError
 from web2cli.output.formatter import format_output
 from web2cli.pipe import read_stdin
@@ -206,6 +214,85 @@ def _unique_extend(dest: list[str], values: list[str]) -> None:
     for value in values:
         if value and value not in dest:
             dest.append(value)
+
+
+def _cookie_keys_from_auth_spec(auth_spec: dict | None) -> list[str]:
+    if not isinstance(auth_spec, dict):
+        return []
+    methods = auth_spec.get("methods", [])
+    if not isinstance(methods, list):
+        return []
+
+    out: list[str] = []
+    for method in methods:
+        if not isinstance(method, dict):
+            continue
+        method_type = str(method.get("type", "cookies")).lower()
+        if method_type != "cookies":
+            continue
+        keys = method.get("keys", [])
+        if not isinstance(keys, list):
+            continue
+        for key in keys:
+            if isinstance(key, str) and key and key not in out:
+                out.append(key)
+    return out
+
+
+def _token_capture_rules_from_auth_spec(auth_spec: dict | None) -> list[TokenCaptureRule]:
+    if not isinstance(auth_spec, dict):
+        return []
+    methods = auth_spec.get("methods", [])
+    if not isinstance(methods, list):
+        return []
+
+    out: list[TokenCaptureRule] = []
+    for method in methods:
+        if not isinstance(method, dict):
+            continue
+        method_type = str(method.get("type", "")).lower()
+        if method_type != "token":
+            continue
+
+        capture = method.get("capture")
+        if not isinstance(capture, dict):
+            continue
+
+        source = str(capture.get("from", "")).strip().lower()
+        key = str(capture.get("key", "")).strip()
+        if not source or not key:
+            continue
+
+        match = capture.get("match")
+        match_dict = match if isinstance(match, dict) else {}
+        host = match_dict.get("host")
+        path_regex = match_dict.get("path_regex")
+        method_name = match_dict.get("method")
+        strip_prefix = capture.get("strip_prefix")
+
+        out.append(
+            TokenCaptureRule(
+                source=source,
+                key=key,
+                host=str(host).strip() if isinstance(host, str) and host.strip() else None,
+                path_regex=(
+                    str(path_regex).strip()
+                    if isinstance(path_regex, str) and path_regex.strip()
+                    else None
+                ),
+                method=(
+                    str(method_name).strip().upper()
+                    if isinstance(method_name, str) and method_name.strip()
+                    else None
+                ),
+                strip_prefix=(
+                    str(strip_prefix)
+                    if isinstance(strip_prefix, str) and strip_prefix
+                    else None
+                ),
+            )
+        )
+    return out
 
 
 def _field_names_from_parse_spec(parse_spec: dict[str, Any]) -> list[str]:
@@ -709,10 +796,21 @@ def login_command(
     cookies: str = typer.Option(None, "--cookies", help='Cookies string "k=v; k2=v2"'),
     cookie_file: str = typer.Option(None, "--cookie-file", help="Path to cookies JSON"),
     token: str = typer.Option(None, "--token", help="Auth token"),
+    browser: bool = typer.Option(
+        False,
+        "--browser",
+        help="Open browser and capture required auth values automatically",
+    ),
+    browser_debug: bool = typer.Option(
+        False,
+        "--browser-debug",
+        help="Show browser auth-capture debug (cookies/token/tabs)",
+    ),
     status: bool = typer.Option(False, "--status", help="Check login status"),
 ) -> None:
     """Save authentication session for a domain."""
     # Resolve alias → adapter domain
+    adapter: AdapterSpec | None = None
     try:
         adapter = load_adapter(domain)
         resolved_domain = adapter.meta.domain
@@ -735,6 +833,86 @@ def login_command(
             err.print(f"  created: {info['created_at']}")
         raise typer.Exit(0)
 
+    if browser and (cookies or cookie_file or token):
+        err.print(
+            "[red]--browser cannot be combined with --cookies, --cookie-file, or --token[/red]"
+        )
+        raise typer.Exit(1)
+    if browser_debug and not browser:
+        err.print("[red]--browser-debug requires --browser[/red]")
+        raise typer.Exit(1)
+
+    if browser:
+        if adapter is None:
+            err.print(
+                f"[red]No adapter found for '{domain}'. --browser requires a known adapter "
+                "with browser auth capture config.[/red]"
+            )
+            raise typer.Exit(1)
+
+        required_cookie_keys = _cookie_keys_from_auth_spec(adapter.auth)
+        token_capture_rules = _token_capture_rules_from_auth_spec(adapter.auth)
+        if not required_cookie_keys and not token_capture_rules:
+            err.print(
+                f"[red]{resolved_domain} does not declare browser-capturable auth in auth.methods "
+                "(cookie keys and/or token capture rules)[/red]"
+            )
+            raise typer.Exit(1)
+
+        err.print(f"\n[bold]Logging into {resolved_domain}[/bold]\n")
+        err.print("  Opening browser...")
+        err.print(f"  → Log in to {resolved_domain} if needed")
+        err.print("  → I'll capture required auth values automatically when ready")
+        err.print("  → Press Ctrl+C to cancel\n")
+        err.print("  ⏳ Waiting for login... (detected: not logged in)")
+        if browser_debug:
+            err.print("  [dim]Browser debug enabled[/dim]")
+
+        try:
+            parsed_cookies, captured_token = capture_auth_with_browser(
+                domain=resolved_domain,
+                required_cookies=required_cookie_keys,
+                token_rules=token_capture_rules,
+                status_cb=lambda msg: err.print(f"  {msg}"),
+                debug_cb=(
+                    (lambda msg: err.print(f"  [dim]browser-debug:[/dim] {escape(msg)}"))
+                    if browser_debug
+                    else None
+                ),
+            )
+        except BrowserLoginCancelled:
+            err.print("[yellow]Login cancelled.[/yellow]")
+            raise typer.Exit(1)
+        except BrowserLoginError as e:
+            err.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+
+        err.print("  ✓ Login detected! Capturing session...")
+        create_session(
+            resolved_domain,
+            cookies=parsed_cookies or None,
+            token=captured_token,
+        )
+        session_path = SESSIONS_DIR / f"{resolved_domain}.json.enc"
+        auth_parts: list[str] = []
+        if parsed_cookies:
+            auth_parts.append("cookies")
+        if captured_token:
+            auth_parts.append("token")
+        auth_label = "+".join(auth_parts) if auth_parts else "auth"
+        err.print(f"  ✓ {auth_label.capitalize()} encrypted and saved to {session_path}")
+        err.print()
+        err.print("  Try it now:")
+        run_target = adapter.meta.aliases[0] if adapter.meta.aliases else adapter.meta.domain
+        if "search" in adapter.commands:
+            sample_cmd = "search"
+        elif adapter.commands:
+            sample_cmd = next(iter(adapter.commands))
+        else:
+            sample_cmd = "--help"
+        err.print(f"    web2cli {run_target} {sample_cmd}")
+        raise typer.Exit(0)
+
     # Parse cookies from string or file
     parsed_cookies = None
     if cookies:
@@ -751,19 +929,15 @@ def login_command(
         raise typer.Exit(1)
 
     # Warn about missing keys if adapter has an auth spec
-    try:
-        adapter = load_adapter(domain)
-        if adapter.auth and parsed_cookies:
-            for method in adapter.auth.get("methods", []):
-                expected = method.get("keys", [])
-                missing = [k for k in expected if k not in parsed_cookies]
-                if missing:
-                    err.print(
-                        f"[yellow]Warning: adapter expects cookie keys "
-                        f"{missing} but they were not provided[/yellow]"
-                    )
-    except AdapterNotFound:
-        pass
+    if adapter and adapter.auth and parsed_cookies:
+        for method in adapter.auth.get("methods", []):
+            expected = method.get("keys", [])
+            missing = [k for k in expected if k not in parsed_cookies]
+            if missing:
+                err.print(
+                    f"[yellow]Warning: adapter expects cookie keys "
+                    f"{missing} but they were not provided[/yellow]"
+                )
 
     # Save session
     session = create_session(resolved_domain, cookies=parsed_cookies, token=token)

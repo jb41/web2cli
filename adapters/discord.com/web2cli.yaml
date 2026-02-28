@@ -22,6 +22,12 @@ auth:
       inject:
         target: header
         key: Authorization
+      capture:
+        from: request.header
+        key: Authorization
+        match:
+          host: discord.com
+          path_regex: "^/api/"
 
 resources:
   guilds:

@@ -18,7 +18,8 @@ Before generation, provide the LLM:
 2. desired commands and CLI args,
 3. sample responses (JSON/HTML) for each command,
 4. auth method (cookies/token/injection target),
-5. expected output fields per command.
+5. browser-capture rules for tokens if `login --browser` should auto-capture them (`auth.methods[].capture`),
+6. expected output fields per command.
 
 Missing samples are the most common cause of weak adapters.
 
@@ -62,7 +63,7 @@ Commands to implement:
 <list commands + args + expected fields>
 
 Auth:
-<cookies/token/inject target details>
+<cookies/token/inject target details + optional token capture rule>
 
 Samples:
 <request/response snippets for each command>

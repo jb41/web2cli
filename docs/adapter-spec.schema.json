@@ -59,6 +59,27 @@
                   "cookie": { "type": "string" }
                 },
                 "additionalProperties": true
+              },
+              "capture": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "enum": ["request.header", "request.form"]
+                  },
+                  "key": { "type": "string" },
+                  "strip_prefix": { "type": "string" },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "host": { "type": "string" },
+                      "path_regex": { "type": "string" },
+                      "method": { "type": "string" }
+                    },
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": true
               }
             },
             "additionalProperties": true
