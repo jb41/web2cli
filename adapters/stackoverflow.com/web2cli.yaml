@@ -214,6 +214,10 @@ commands:
           format: html
           extract: "div.s-post-summary"
           fields:
+            - name: id
+              path: "h3 a.s-link"
+              attribute: href
+              transform: int
             - name: title
               path: "h3 a.s-link"
               attribute: text
@@ -243,5 +247,5 @@ commands:
                 order: desc
     output:
       from_step: sorted
-      default_fields: [title, votes, answers, tags]
+      default_fields: [id, title, votes, answers, tags]
       default_format: table
