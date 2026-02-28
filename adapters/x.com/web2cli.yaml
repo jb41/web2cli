@@ -35,6 +35,7 @@ commands:
       - request:
           name: fetch
           provider: x_graphql
+          use_transaction: false
           operation: TweetDetail
           variables:
             focalTweetId: "{{args.id}}"
@@ -49,18 +50,21 @@ commands:
           name: parsed
           from: fetch
           format: json
-          extract: "$.data.threaded_conversation_with_injections_v2.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          extract: "$.data.threaded_conversation_with_injections_v2.instructions[].entries[].content.itemContent.tweet_results.result"
           fields:
             - name: id
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.id_str"
                   - "$.tweet.legacy.id_str"
                   - "$.legacy.id_str"
             - name: author
               from:
                 coalesce:
+                  - "$.tweet.result.core.user_results.result.core.screen_name"
                   - "$.tweet.core.user_results.result.core.screen_name"
                   - "$.core.user_results.result.core.screen_name"
+                  - "$.tweet.result.core.user_results.result.legacy.screen_name"
                   - "$.tweet.core.user_results.result.legacy.screen_name"
                   - "$.core.user_results.result.legacy.screen_name"
               ops:
@@ -69,44 +73,53 @@ commands:
             - name: name
               from:
                 coalesce:
+                  - "$.tweet.result.core.user_results.result.core.name"
                   - "$.tweet.core.user_results.result.core.name"
                   - "$.core.user_results.result.core.name"
+                  - "$.tweet.result.core.user_results.result.legacy.name"
                   - "$.tweet.core.user_results.result.legacy.name"
                   - "$.core.user_results.result.legacy.name"
             - name: text
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.full_text"
                   - "$.tweet.legacy.full_text"
                   - "$.legacy.full_text"
             - name: date
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.created_at"
                   - "$.tweet.legacy.created_at"
                   - "$.legacy.created_at"
               transform: x_datetime
             - name: retweets
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.retweet_count"
                   - "$.tweet.legacy.retweet_count"
                   - "$.legacy.retweet_count"
             - name: likes
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.favorite_count"
                   - "$.tweet.legacy.favorite_count"
                   - "$.legacy.favorite_count"
             - name: replies
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.reply_count"
                   - "$.tweet.legacy.reply_count"
                   - "$.legacy.reply_count"
             - name: views
               from:
                 coalesce:
+                  - "$.tweet.result.views.count"
                   - "$.tweet.views.count"
                   - "$.views.count"
             - name: url
               from:
                 coalesce:
+                  - "$.tweet.result.legacy.id_str"
                   - "$.tweet.legacy.id_str"
                   - "$.legacy.id_str"
               template: "https://x.com/i/status/{{value}}"
@@ -130,6 +143,7 @@ commands:
       - request:
           name: fetch
           provider: x_graphql
+          use_transaction: false
           operation: UserByScreenName
           variables:
             screen_name: "{{args.user}}"
@@ -201,7 +215,7 @@ commands:
           name: parsed
           from: fetch
           format: json
-          extract: "$.data.search_by_raw_query.search_timeline.timeline.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          extract: "$.data.search_by_raw_query.search_timeline.timeline.instructions[].entries[].content.itemContent.tweet_results.result"
           fields:
             - name: id
               from:
@@ -285,7 +299,7 @@ commands:
           name: parsed
           from: fetch
           format: json
-          extract: "$.data.home.home_timeline_urt.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          extract: "$.data.home.home_timeline_urt.instructions[].entries[].content.itemContent.tweet_results.result"
           fields:
             - name: id
               from:
@@ -372,7 +386,7 @@ commands:
           name: parsed
           from: fetch
           format: json
-          extract: "$.data.home.home_timeline_urt.instructions[*].entries[*].content.itemContent.tweet_results.result"
+          extract: "$.data.home.home_timeline_urt.instructions[].entries[].content.itemContent.tweet_results.result"
           fields:
             - name: id
               from:

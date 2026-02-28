@@ -160,7 +160,7 @@ def _build_request(
 ) -> Request:
     if request_spec.get("provider"):
         provider_name = request_spec["provider"]
-        provider = get_provider(provider_name)
+        provider = get_provider(provider_name, adapter=adapter)
         req = provider.build_request(request_spec, ctx, adapter, session)
         return _apply_auth_injection(req, request_spec, adapter.auth, session)
 

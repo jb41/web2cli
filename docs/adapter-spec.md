@@ -533,11 +533,16 @@ Use `--trace` when:
 
 ## 13. Provider Plugins
 
-Provider plugins live in core runtime (not adapter-local scripts).
+Provider plugins SHOULD live with the adapter that uses them:
 
-Current built-in provider:
+```text
+adapters/<domain>/providers/<provider_name>.py
+```
 
-- `x_graphql`
+Runtime loads provider modules dynamically:
+
+- first from the current adapter directory (`adapter_dir/providers`)
+- then from known adapter roots (`adapters/`, `~/.web2cli/adapters/`)
 
 Provider handles protocol-specific behavior (query-id refresh, transaction headers, etc), while adapter YAML stays declarative.
 
