@@ -789,8 +789,9 @@ def adapters_lint(
 
 @app.command("login")
 def login_command(
-    domain: str = typer.Argument(
-        ...,
+    ctx: typer.Context,
+    domain: str | None = typer.Argument(
+        None,
         help="Domain or alias to authenticate",
     ),
     cookies: str = typer.Option(None, "--cookies", help='Cookies string "k=v; k2=v2"'),
@@ -808,7 +809,19 @@ def login_command(
     ),
     status: bool = typer.Option(False, "--status", help="Check login status"),
 ) -> None:
-    """Save authentication session for a domain."""
+    """Save authentication session for a domain.
+
+    Examples:
+      web2cli login hn --browser
+      web2cli login slack --browser --browser-debug
+      web2cli login reddit --cookies "reddit_session=..."
+      web2cli login discord --token "..."
+      web2cli login x --status
+    """
+    if not domain:
+        err.print(ctx.get_help())
+        raise typer.Exit(0)
+
     # Resolve alias → adapter domain
     adapter: AdapterSpec | None = None
     try:
@@ -925,7 +938,15 @@ def login_command(
             raise typer.Exit(1)
 
     if not parsed_cookies and not token:
-        err.print("[red]Provide --cookies, --cookie-file, or --token[/red]")
+        err.print("[red]Provide one of: --cookies, --cookie-file, --token, or --browser[/red]")
+        if adapter is not None:
+            browser_supported = bool(
+                _cookie_keys_from_auth_spec(adapter.auth)
+                or _token_capture_rules_from_auth_spec(adapter.auth)
+            )
+            if browser_supported:
+                login_target = adapter.meta.aliases[0] if adapter.meta.aliases else domain
+                err.print(f"[dim]Tip: try `web2cli login {login_target} --browser`[/dim]")
         raise typer.Exit(1)
 
     # Warn about missing keys if adapter has an auth spec
