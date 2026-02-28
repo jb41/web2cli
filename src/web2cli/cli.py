@@ -295,6 +295,100 @@ def _token_capture_rules_from_auth_spec(auth_spec: dict | None) -> list[TokenCap
     return out
 
 
+def _token_capture_rule_text(rule: TokenCaptureRule) -> str:
+    parts = [f"{rule.source}:{rule.key}"]
+    if rule.method:
+        parts.append(rule.method.upper())
+    if rule.host:
+        parts.append(rule.host)
+    if rule.path_regex:
+        parts.append(f"path~{rule.path_regex}")
+    if rule.strip_prefix:
+        parts.append(f"strip_prefix={rule.strip_prefix!r}")
+    return " ".join(parts)
+
+
+def _print_login_auth_guide(
+    adapter: AdapterSpec,
+    *,
+    resolved_domain: str,
+    login_target: str,
+) -> None:
+    auth = adapter.auth if isinstance(adapter.auth, dict) else {}
+    methods = auth.get("methods", [])
+    if not isinstance(methods, list):
+        methods = []
+
+    cookie_keys: list[str] = []
+    cookie_env_vars: list[str] = []
+    token_env_vars: list[str] = []
+    for method in methods:
+        if not isinstance(method, dict):
+            continue
+        mtype = str(method.get("type", "cookies")).lower()
+        env_var = method.get("env_var")
+        if mtype == "cookies":
+            keys = method.get("keys", [])
+            if isinstance(keys, list):
+                for key in keys:
+                    if isinstance(key, str) and key and key not in cookie_keys:
+                        cookie_keys.append(key)
+            if isinstance(env_var, str) and env_var and env_var not in cookie_env_vars:
+                cookie_env_vars.append(env_var)
+        elif mtype == "token":
+            if isinstance(env_var, str) and env_var and env_var not in token_env_vars:
+                token_env_vars.append(env_var)
+
+    token_capture_rules = _token_capture_rules_from_auth_spec(adapter.auth)
+    browser_supported = bool(cookie_keys or token_capture_rules)
+
+    err.print()
+    err.print(f"[bold]Auth guide for {resolved_domain}[/bold]")
+
+    if browser_supported:
+        err.print(
+            f"  [green]Auto capture (recommended):[/green] "
+            f"`web2cli login {login_target} --browser`"
+        )
+    else:
+        err.print("  [yellow]Auto capture:[/yellow] not configured in this adapter")
+
+    if cookie_keys:
+        cookie_example = "; ".join(f"{k}=<value>" for k in cookie_keys)
+        cookie_json_example = ", ".join(f'"{k}": "<value>"' for k in cookie_keys)
+        err.print(f"  Cookies required: {', '.join(cookie_keys)}")
+        err.print(
+            f"  Manual: `web2cli login {login_target} --cookies \"{cookie_example}\"`"
+        )
+        err.print(
+            f"  File:   `web2cli login {login_target} --cookie-file /path/cookies.json` "
+            f"(JSON: {{{cookie_json_example}}})"
+        )
+
+    if token_env_vars or token_capture_rules:
+        err.print(f"  Token:  `web2cli login {login_target} --token \"<token>\"`")
+
+    if cookie_env_vars:
+        cookie_env_example = "; ".join(f"{k}=<value>" for k in cookie_keys) or "k=v"
+        for env_var in cookie_env_vars:
+            err.print(f"  Env:    `export {env_var}=\"{cookie_env_example}\"`")
+
+    if token_env_vars:
+        for env_var in token_env_vars:
+            err.print(f"  Env:    `export {env_var}=\"<token>\"`")
+
+    if token_capture_rules:
+        err.print("  Token capture rules from adapter:")
+        for idx, rule in enumerate(token_capture_rules, start=1):
+            err.print(f"    {idx}. {_token_capture_rule_text(rule)}")
+        err.print(
+            "  Manual token extraction: open DevTools -> Network, find a request matching "
+            "the rule, copy the token value."
+        )
+
+    err.print(f"  Check:  `web2cli login {login_target} --status`")
+
+
 def _field_names_from_parse_spec(parse_spec: dict[str, Any]) -> list[str]:
     fields = parse_spec.get("fields")
     if not isinstance(fields, list):
@@ -817,6 +911,7 @@ def login_command(
       web2cli login reddit --cookies "reddit_session=..."
       web2cli login discord --token "..."
       web2cli login x --status
+      web2cli login hn          # show adapter-specific auth guide
     """
     if not domain:
         err.print(ctx.get_help())
@@ -940,13 +1035,12 @@ def login_command(
     if not parsed_cookies and not token:
         err.print("[red]Provide one of: --cookies, --cookie-file, --token, or --browser[/red]")
         if adapter is not None:
-            browser_supported = bool(
-                _cookie_keys_from_auth_spec(adapter.auth)
-                or _token_capture_rules_from_auth_spec(adapter.auth)
+            login_target = adapter.meta.aliases[0] if adapter.meta.aliases else domain
+            _print_login_auth_guide(
+                adapter,
+                resolved_domain=resolved_domain,
+                login_target=login_target,
             )
-            if browser_supported:
-                login_target = adapter.meta.aliases[0] if adapter.meta.aliases else domain
-                err.print(f"[dim]Tip: try `web2cli login {login_target} --browser`[/dim]")
         raise typer.Exit(1)
 
     # Warn about missing keys if adapter has an auth spec
