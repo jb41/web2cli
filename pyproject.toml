@@ -1,6 +1,6 @@
 [project]
 name = "web2cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Every website is a command"
 requires-python = ">=3.11"
 readme = "README.md"
