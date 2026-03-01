@@ -3,6 +3,8 @@
 .DS_Store
 *.egg-info/
 __pycache__/
+dist/
+build/
 
 dc-bot/
 SCRATCHPAD.md
