@@ -4,7 +4,7 @@
 
 Browse Hacker News, search X.com, write Discord messages, read Reddit — all from your terminal. No browser, no API keys, no $100/mo plans.
 
-![DEMO](demo.gif)
+![DEMO](https://raw.githubusercontent.com/jb41/web2cli/main/demo.gif)
 
 ```bash
 $ web2cli hn top --limit 3
@@ -424,7 +424,7 @@ and your agent gets an opaque session token. No cookies touch your server.
 
 Think "OAuth for websites that don't have OAuth."
 
-→ [Join the waitlist](https://web2cli.com/cloud)
+→ [Join the waitlist](https://web2cli.com#cloud)
 
 ---
 
