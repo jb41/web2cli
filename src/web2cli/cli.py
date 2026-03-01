@@ -1,5 +1,6 @@
 """CLI entry point for web2cli."""
 
+import asyncio
 from typing import Any
 
 import typer
@@ -19,10 +20,15 @@ from web2cli.auth.manager import (
     remove_session,
 )
 from web2cli.auth.browser_login import (
+    AutoCdpSession,
     BrowserLoginCancelled,
     BrowserLoginError,
     TokenCaptureRule,
     capture_auth_with_browser,
+    find_local_chrome_executable,
+    probe_cdp_endpoint,
+    start_auto_cdp_chrome,
+    stop_auto_cdp_chrome,
 )
 from web2cli.auth.store import SESSIONS_DIR
 from web2cli.executor.http import HttpError
@@ -877,6 +883,141 @@ def adapters_lint(
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: web2cli doctor
+# ---------------------------------------------------------------------------
+
+
+doctor_app = typer.Typer(
+    name="doctor",
+    help="Run environment diagnostics",
+    invoke_without_command=True,
+)
+app.add_typer(doctor_app)
+
+
+@doctor_app.callback()
+def doctor_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
+
+
+def _print_doctor_status(status: str, name: str, detail: str) -> None:
+    if status == "ok":
+        err.print(f"  [green]ok[/green] {name}: {detail}")
+    elif status == "warn":
+        err.print(f"  [yellow]warn[/yellow] {name}: {detail}")
+    else:
+        err.print(f"  [red]fail[/red] {name}: {detail}")
+
+
+def _doctor_error_summary(exc: Exception, max_len: int = 220) -> str:
+    text = str(exc).strip()
+    if not text:
+        return exc.__class__.__name__
+    line = text.splitlines()[0].strip()
+    if len(line) > max_len:
+        return line[: max_len - 3] + "..."
+    return line
+
+
+@doctor_app.command("browser")
+def doctor_browser(
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Run launch smoke tests (starts/stops browser processes)",
+    ),
+    cdp_url: str = typer.Option(
+        "http://127.0.0.1:9222",
+        "--cdp-url",
+        help="CDP endpoint to probe (info only)",
+    ),
+) -> None:
+    """Diagnose browser stack used by `web2cli login --browser`."""
+    failures = 0
+    warnings = 0
+
+    err.print("\n[bold]Browser Doctor[/bold]\n")
+
+    chrome_path = find_local_chrome_executable()
+    if chrome_path:
+        _print_doctor_status("ok", "chrome", chrome_path)
+    else:
+        _print_doctor_status("warn", "chrome", "not found in standard locations/PATH")
+        warnings += 1
+
+    cdp_running = probe_cdp_endpoint(cdp_url, timeout_seconds=1.0)
+    if cdp_running:
+        _print_doctor_status("ok", "cdp-endpoint", f"reachable at {cdp_url}")
+    else:
+        _print_doctor_status("warn", "cdp-endpoint", f"not reachable at {cdp_url}")
+        warnings += 1
+
+    playwright_async_api = None
+    try:
+        from playwright import async_api as playwright_async_api  # type: ignore[assignment]
+
+        _print_doctor_status("ok", "playwright-python", "importable")
+    except Exception as e:
+        _print_doctor_status("fail", "playwright-python", str(e))
+        failures += 1
+
+    if deep:
+        err.print("\n[bold]Deep checks[/bold]")
+
+        auto_session: AutoCdpSession | None = None
+        try:
+            auto_session = start_auto_cdp_chrome(
+                status_cb=None,
+                debug_cb=None,
+                headless=True,
+            )
+            _print_doctor_status("ok", "cdp-auto-launch", auto_session.cdp_url)
+            if probe_cdp_endpoint(auto_session.cdp_url, timeout_seconds=1.5):
+                _print_doctor_status("ok", "cdp-auto-probe", "endpoint responded")
+            else:
+                _print_doctor_status("fail", "cdp-auto-probe", "endpoint did not respond")
+                failures += 1
+        except Exception as e:
+            _print_doctor_status("fail", "cdp-auto-launch", _doctor_error_summary(e))
+            failures += 1
+        finally:
+            if auto_session is not None:
+                stop_auto_cdp_chrome(auto_session)
+
+        if playwright_async_api is not None:
+            async def _probe_playwright_launch() -> None:
+                async with playwright_async_api.async_playwright() as p:
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        ignore_default_args=["--enable-automation", "--no-sandbox"],
+                    )
+                    await browser.close()
+
+            try:
+                asyncio.run(_probe_playwright_launch())
+                _print_doctor_status("ok", "playwright-launch", "chromium launched headless")
+            except Exception as e:
+                _print_doctor_status("fail", "playwright-launch", _doctor_error_summary(e))
+                failures += 1
+
+    err.print()
+    if failures:
+        err.print(
+            f"[red]browser doctor failed: {failures} failure(s), {warnings} warning(s)[/red]"
+        )
+        raise typer.Exit(1)
+
+    if warnings:
+        err.print(
+            f"[yellow]browser doctor passed with warnings ({warnings})[/yellow]"
+        )
+    else:
+        err.print("[green]browser doctor passed[/green]")
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: web2cli login / logout
 # ---------------------------------------------------------------------------
 
@@ -900,6 +1041,30 @@ def login_command(
         False,
         "--browser-debug",
         help="Show browser auth-capture debug (cookies/token/tabs)",
+    ),
+    browser_cdp_url: str = typer.Option(
+        None,
+        "--browser-cdp-url",
+        help="Attach to existing Chrome via CDP (e.g. http://127.0.0.1:9222)",
+        hidden=True,
+    ),
+    browser_cdp_auto: bool = typer.Option(
+        False,
+        "--browser-cdp-auto",
+        help="Start local Chrome automatically and attach via CDP",
+        hidden=True,
+    ),
+    browser_cdp_port: int = typer.Option(
+        None,
+        "--browser-cdp-port",
+        help="CDP port for --browser-cdp-auto (default: random free port)",
+        hidden=True,
+    ),
+    browser_chrome_path: str = typer.Option(
+        None,
+        "--browser-chrome-path",
+        help="Chrome executable path for --browser-cdp-auto",
+        hidden=True,
     ),
     status: bool = typer.Option(False, "--status", help="Check login status"),
 ) -> None:
@@ -946,6 +1111,27 @@ def login_command(
             "[red]--browser cannot be combined with --cookies, --cookie-file, or --token[/red]"
         )
         raise typer.Exit(1)
+    if browser_cdp_url and not browser:
+        err.print("[red]--browser-cdp-url requires --browser[/red]")
+        raise typer.Exit(1)
+    if browser_cdp_auto and not browser:
+        err.print("[red]--browser-cdp-auto requires --browser[/red]")
+        raise typer.Exit(1)
+    if browser_cdp_url and browser_cdp_auto:
+        err.print("[red]Use only one: --browser-cdp-url or --browser-cdp-auto[/red]")
+        raise typer.Exit(1)
+    if browser_cdp_port is not None and not browser:
+        err.print("[red]--browser-cdp-port requires --browser[/red]")
+        raise typer.Exit(1)
+    if browser_chrome_path and not browser:
+        err.print("[red]--browser-chrome-path requires --browser[/red]")
+        raise typer.Exit(1)
+    if browser_cdp_url and browser_cdp_port is not None:
+        err.print("[red]--browser-cdp-port cannot be used with --browser-cdp-url[/red]")
+        raise typer.Exit(1)
+    if browser_cdp_url and browser_chrome_path:
+        err.print("[red]--browser-chrome-path cannot be used with --browser-cdp-url[/red]")
+        raise typer.Exit(1)
     if browser_debug and not browser:
         err.print("[red]--browser-debug requires --browser[/red]")
         raise typer.Exit(1)
@@ -971,6 +1157,8 @@ def login_command(
         err.print("  Opening browser...")
         err.print(f"  → Log in to {resolved_domain} if needed")
         err.print("  → I'll capture required auth values automatically when ready")
+        if browser_cdp_url:
+            err.print(f"  → Using existing browser via CDP: {browser_cdp_url}")
         err.print("  → Press Ctrl+C to cancel\n")
         err.print("  ⏳ Waiting for login... (detected: not logged in)")
         if browser_debug:
@@ -987,6 +1175,10 @@ def login_command(
                     if browser_debug
                     else None
                 ),
+                cdp_url=browser_cdp_url,
+                cdp_auto=browser_cdp_auto,
+                cdp_port=browser_cdp_port,
+                chrome_path=browser_chrome_path,
             )
         except BrowserLoginCancelled:
             err.print("[yellow]Login cancelled.[/yellow]")

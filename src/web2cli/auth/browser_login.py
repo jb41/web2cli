@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import shutil
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from collections.abc import Callable
+from pathlib import Path
+from urllib.request import urlopen
 from urllib.parse import parse_qs, urlparse
 
 
@@ -29,6 +36,16 @@ class TokenCaptureRule:
     path_regex: str | None = None
     method: str | None = None
     strip_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class AutoCdpSession:
+    """Process/session details for auto-started local Chrome over CDP."""
+
+    cdp_url: str
+    process: subprocess.Popen[str]
+    user_data_dir: Path
+    port: int
 
 
 def _emit(status_cb: Callable[[str], None] | None, message: str) -> None:
@@ -72,6 +89,8 @@ def _is_missing_browser_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return (
         "executable doesn't exist" in text
+        or "chromium distribution 'chrome'" in text
+        or "cannot find chromium" in text
         or ("playwright install" in text and "chromium" in text)
     )
 
@@ -79,6 +98,180 @@ def _is_missing_browser_error(exc: Exception) -> bool:
 def _install_chromium(status_cb: Callable[[str], None] | None) -> None:
     _emit(status_cb, "Installing browser engine (one-time, ~50MB)...")
     _run_command([sys.executable, "-m", "playwright", "install", "chromium"])
+
+
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        return int(sock.getsockname()[1])
+
+
+def _find_chrome_executable() -> str | None:
+    if sys.platform == "darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return candidate
+        return None
+
+    if sys.platform.startswith("win"):
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return candidate
+        return None
+
+    for cmd in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        found = shutil.which(cmd)
+        if found:
+            return found
+    return None
+
+
+def _wait_for_cdp_ready(port: int, timeout_seconds: float = 12.0) -> bool:
+    url = f"http://127.0.0.1:{port}/json/version"
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            with urlopen(url, timeout=1.0) as resp:
+                payload = resp.read().decode("utf-8", errors="ignore")
+                data = json.loads(payload or "{}")
+                if isinstance(data, dict) and data.get("webSocketDebuggerUrl"):
+                    return True
+        except Exception:
+            pass
+
+        now = time.monotonic()
+        if now >= deadline:
+            return False
+        time.sleep(0.2)
+
+
+def _stop_auto_cdp_session(session: AutoCdpSession) -> None:
+    proc = session.process
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except Exception:
+                proc.kill()
+    except Exception:
+        pass
+    shutil.rmtree(session.user_data_dir, ignore_errors=True)
+
+
+def find_local_chrome_executable() -> str | None:
+    """Return local Chrome/Chromium executable path if found."""
+    return _find_chrome_executable()
+
+
+def probe_cdp_endpoint(cdp_url: str, timeout_seconds: float = 2.0) -> bool:
+    """Best-effort probe for a running CDP endpoint."""
+    url = cdp_url.rstrip("/") + "/json/version"
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(url, timeout=1.0) as resp:
+                payload = resp.read().decode("utf-8", errors="ignore")
+                data = json.loads(payload or "{}")
+                if isinstance(data, dict) and data.get("webSocketDebuggerUrl"):
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
+
+
+def start_auto_cdp_chrome(
+    *,
+    status_cb: Callable[[str], None] | None = None,
+    debug_cb: Callable[[str], None] | None = None,
+    chrome_path: str | None = None,
+    port: int | None = None,
+    headless: bool = False,
+) -> AutoCdpSession:
+    """Start local Chrome with CDP and return session metadata."""
+    return _start_auto_cdp_chrome(
+        status_cb=status_cb,
+        debug_cb=debug_cb,
+        chrome_path=chrome_path,
+        port=port,
+        headless=headless,
+    )
+
+
+def stop_auto_cdp_chrome(session: AutoCdpSession) -> None:
+    """Stop auto-started CDP Chrome session and remove temp profile."""
+    _stop_auto_cdp_session(session)
+
+
+def _start_auto_cdp_chrome(
+    *,
+    status_cb: Callable[[str], None] | None,
+    debug_cb: Callable[[str], None] | None,
+    chrome_path: str | None = None,
+    port: int | None = None,
+    headless: bool = False,
+) -> AutoCdpSession:
+    binary = chrome_path or _find_chrome_executable()
+    if not binary:
+        raise BrowserLoginError(
+            "Could not find local Chrome executable for --browser-cdp-auto. "
+            "Use --browser-cdp-url or --browser-chrome-path."
+        )
+
+    cdp_port = int(port or _pick_free_port())
+    user_data_dir = Path(tempfile.mkdtemp(prefix="web2cli-cdp-"))
+    args = [
+        binary,
+        f"--remote-debugging-port={cdp_port}",
+        f"--user-data-dir={str(user_data_dir)}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if headless:
+        args.append("--headless=new")
+
+    _emit(status_cb, "Starting local browser...")
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if debug_cb:
+        _emit_debug(debug_cb, f"cdp auto: chrome={binary}")
+        _emit_debug(debug_cb, f"cdp auto: port={cdp_port} profile={user_data_dir}")
+
+    ready = _wait_for_cdp_ready(cdp_port, timeout_seconds=12.0)
+    if not ready:
+        _stop_auto_cdp_session(
+            AutoCdpSession(
+                cdp_url=f"http://127.0.0.1:{cdp_port}",
+                process=proc,
+                user_data_dir=user_data_dir,
+                port=cdp_port,
+            )
+        )
+        raise BrowserLoginError(
+            "Failed to start local Chrome CDP endpoint. "
+            "Try --browser-cdp-url with an existing Chrome instance."
+        )
+
+    return AutoCdpSession(
+        cdp_url=f"http://127.0.0.1:{cdp_port}",
+        process=proc,
+        user_data_dir=user_data_dir,
+        port=cdp_port,
+    )
 
 
 def _header_value(headers: dict[str, str], key: str) -> str | None:
@@ -241,6 +434,98 @@ def _request_matches_any_rule(request, rules: list[TokenCaptureRule]) -> bool:
     return False
 
 
+async def _apply_stealth_init_script(context) -> None:
+    # Best-effort JS patches to reduce obvious automation fingerprints.
+    script = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+window.chrome = window.chrome || { runtime: {} };
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+"""
+    try:
+        await context.add_init_script(script)
+    except Exception:
+        return
+
+
+async def _launch_browser_with_fallback(
+    playwright_async_api,
+    debug_cb: Callable[[str], None] | None,
+):
+    common_args = [
+        "--disable-features=PrivateNetworkAccessRespectPreflightResults,"
+        "BlockInsecurePrivateNetworkRequests",
+        "--disable-blink-features=AutomationControlled",
+    ]
+
+    # Prefer user-installed Chrome first (looks less synthetic than Playwright Chromium).
+    launch_profiles = [
+        (
+            "chrome",
+            {
+                "channel": "chrome",
+                "headless": False,
+                "args": common_args,
+                "ignore_default_args": ["--enable-automation", "--no-sandbox"],
+            },
+        ),
+        (
+            "chromium",
+            {
+                "headless": False,
+                "args": common_args,
+                "ignore_default_args": ["--enable-automation", "--no-sandbox"],
+            },
+        ),
+    ]
+
+    errors: list[str] = []
+    for profile_name, options in launch_profiles:
+        try:
+            browser = await playwright_async_api.chromium.launch(**options)
+            if debug_cb:
+                _emit_debug(debug_cb, f"browser profile: {profile_name}")
+            return browser, profile_name
+        except Exception as e:
+            errors.append(f"{profile_name}: {e}")
+            if debug_cb:
+                _emit_debug(debug_cb, f"browser profile failed: {profile_name}: {e}")
+
+    detail = " | ".join(errors)
+    raise BrowserLoginError(f"Failed to launch browser ({detail})")
+
+
+async def _open_browser_and_context(
+    playwright_async_api,
+    *,
+    debug_cb: Callable[[str], None] | None,
+    cdp_url: str | None,
+):
+    if cdp_url:
+        browser = await playwright_async_api.chromium.connect_over_cdp(cdp_url)
+        contexts = list(browser.contexts)
+        if contexts:
+            context = contexts[0]
+        else:
+            context = await browser.new_context(viewport={"width": 1280, "height": 900})
+        if debug_cb:
+            _emit_debug(debug_cb, f"browser profile: cdp ({cdp_url})")
+            _emit_debug(
+                debug_cb,
+                f"cdp contexts={len(contexts)} tabs={len(getattr(context, 'pages', []))}",
+            )
+        return browser, context, "cdp", False
+
+    browser, browser_profile = await _launch_browser_with_fallback(
+        playwright_async_api,
+        debug_cb=debug_cb,
+    )
+    context = await browser.new_context(
+        viewport={"width": 1280, "height": 900},
+    )
+    return browser, context, browser_profile, True
+
+
 def _rule_matches_request(rule: TokenCaptureRule, *, host: str, path: str, method: str) -> bool:
     if rule.host:
         normalized = rule.host.lower()
@@ -308,6 +593,7 @@ async def _capture_auth_once(
     token_rules: list[TokenCaptureRule],
     poll_seconds: float = 1.0,
     debug_cb: Callable[[str], None] | None = None,
+    cdp_url: str | None = None,
 ) -> tuple[dict[str, str], str | None]:
     required = [c for c in required_cookies if c]
     if not required and not token_rules:
@@ -316,8 +602,14 @@ async def _capture_auth_once(
         )
 
     async with playwright_async_api.async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
+        browser, context, browser_profile, managed_browser = await _open_browser_and_context(
+            p,
+            debug_cb=debug_cb,
+            cdp_url=cdp_url,
+        )
+        await _apply_stealth_init_script(context)
+        if debug_cb:
+            _emit_debug(debug_cb, f"context ready ({browser_profile}, viewport=1280x900)")
 
         captured_token: str | None = None
         captured_token_source: str | None = None
@@ -426,7 +718,13 @@ async def _capture_auth_once(
             cookies_ready = all(name in by_name for name in required)
             token_ready = (not token_rules) or (captured_token is not None)
             if cookies_ready and token_ready:
-                await browser.close()
+                if managed_browser:
+                    await browser.close()
+                else:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
                 out_cookies = {name: by_name[name] for name in required}
                 return out_cookies, captured_token
             await asyncio.sleep(poll_seconds)
@@ -438,12 +736,39 @@ def capture_auth_with_browser(
     token_rules: list[TokenCaptureRule] | None = None,
     status_cb: Callable[[str], None] | None = None,
     debug_cb: Callable[[str], None] | None = None,
+    cdp_url: str | None = None,
+    cdp_auto: bool = False,
+    cdp_port: int | None = None,
+    chrome_path: str | None = None,
 ) -> tuple[dict[str, str], str | None]:
     """Open browser and wait until required auth values are present."""
     normalized_rules = token_rules or []
     playwright_async_api = _ensure_playwright_package(status_cb)
+    auto_session: AutoCdpSession | None = None
 
     try:
+        # Default behavior: transparently prefer local Chrome via CDP when URL isn't explicit.
+        prefer_auto_cdp = cdp_auto or (cdp_url is None)
+        if prefer_auto_cdp and cdp_url is None:
+            try:
+                auto_session = _start_auto_cdp_chrome(
+                    status_cb=status_cb,
+                    debug_cb=debug_cb,
+                    chrome_path=chrome_path,
+                    port=cdp_port,
+                )
+                cdp_url = auto_session.cdp_url
+                if debug_cb:
+                    _emit_debug(debug_cb, f"cdp auto ready: {cdp_url}")
+            except BrowserLoginError as e:
+                if cdp_auto:
+                    raise
+                # Silent fallback for default --browser mode.
+                _emit(status_cb, "Local browser unavailable, falling back to embedded browser...")
+                if debug_cb:
+                    _emit_debug(debug_cb, f"cdp auto unavailable, fallback to playwright: {e}")
+                cdp_url = None
+
         return asyncio.run(
             _capture_auth_once(
                 playwright_async_api,
@@ -451,6 +776,7 @@ def capture_auth_with_browser(
                 required_cookies,
                 normalized_rules,
                 debug_cb=debug_cb,
+                cdp_url=cdp_url,
             )
         )
     except KeyboardInterrupt:
@@ -466,6 +792,7 @@ def capture_auth_with_browser(
                         required_cookies,
                         normalized_rules,
                         debug_cb=debug_cb,
+                        cdp_url=cdp_url,
                     )
                 )
             except KeyboardInterrupt:
@@ -473,6 +800,9 @@ def capture_auth_with_browser(
             except Exception as inner:
                 raise BrowserLoginError(str(inner))
         raise BrowserLoginError(str(e))
+    finally:
+        if auto_session is not None:
+            _stop_auto_cdp_session(auto_session)
 
 
 def capture_cookies_with_browser(
