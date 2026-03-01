@@ -38,6 +38,7 @@ $ web2cli login discord --browser
 $ web2cli discord send --server "My Server" --channel general --message "deployed 🚀" > /dev/null
 ```
 
+
 ## Why?
 - **For agents**: HTTP GET, not Chromium. 50ms not 5s. 10k requests for a penny.
 - **For humans**: `curl` for the modern web. Pipe, grep, script anything.
@@ -46,6 +47,7 @@ $ web2cli discord send --server "My Server" --channel general --message "deploye
 ```bash
 pip install web2cli
 ```
+
 
 ## More code examples
 ### Daily HN top stories summary
@@ -111,16 +113,18 @@ while True:
     send(reply)
 ```
 
+
 ## Installation
 ```
 pip install web2cli
 ```
 
-# Verify
+### Verify
 ```
 web2cli --version
 web2cli hn top --limit 1
 ```
+
 
 ## Performance
 
@@ -157,6 +161,7 @@ web2cli makes direct HTTP requests. No browser, no DOM, no screenshots.
 
 > Browser automation is the right choice for sites that require JS rendering
 > or complex interaction flows. web2cli is for the 80% of tasks that don't.
+
 
 ## Built-in Adapters
 Current built-in adapters and actions:
@@ -213,12 +218,14 @@ web2cli adapters list
 web2cli adapters info <domain-or-alias>
 ```
 
+
 ## Documentation
 Key docs for contributors:
 
 - `docs/adapter-spec.md` - canonical adapter specification (current: `0.2`)
 - `docs/llm-adapter-playbook.md` - adapter authoring workflow for LLM agents
 - `docs/adapter-spec.schema.json` - machine-readable schema for quick structural checks
+
 
 ## Custom Adapters
 
@@ -227,6 +234,7 @@ Create adapters with a single YAML file. No code required for most sites.
 → [Quickstart guide](docs/custom-adapters-quickstart.md)
 → [Full adapter spec](docs/adapter-spec.md)
 → [LLM playbook](docs/llm-adapter-playbook.md)
+
 
 ## Debugging and Quality
 
@@ -245,6 +253,7 @@ web2cli so question --id 79861629 --format json --no-truncate
 web2cli doctor browser
 web2cli doctor browser --deep
 ```
+
 
 ## Browser Login
 
@@ -294,6 +303,7 @@ web2cli login slack --browser --browser-debug
 This prints live capture state (have/missing cookies, token status, tracked tabs in browser context).
 
 `--browser` automatically picks the best browser strategy (including local Chrome fallback for stricter sites) so users typically don't need extra setup.
+
 
 ## web2cli Cloud (coming soon)
 
