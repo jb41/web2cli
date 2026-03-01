@@ -4,6 +4,8 @@
 
 Browse Hacker News, search X.com, write Discord messages, read Reddit — all from your terminal. No browser, no API keys, no $100/mo plans.
 
+![DEMO](demo.gif)
+
 ```bash
 $ web2cli hn top --limit 3
 ┌──────┬──────────────────────────────────────────┬───────┬──────────┐
