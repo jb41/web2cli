@@ -1,5 +1,6 @@
 .claude
 .venv
+.DS_Store
 *.egg-info/
 __pycache__/
 
