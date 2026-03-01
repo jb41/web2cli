@@ -349,6 +349,10 @@ web2cli reddit posts --sub python --limit 3 --trace
 
 # Disable adapter/parser truncation (full text fields)
 web2cli so question --id 79861629 --format json --no-truncate
+
+# Diagnose browser stack used by `login --browser`
+web2cli doctor browser
+web2cli doctor browser --deep
 ```
 
 ## Browser Login
@@ -390,8 +394,6 @@ Inspect current login state:
 web2cli login x.com --status
 ```
 
-# Inspect step-by-step runtime trace for a command
-web2cli reddit posts --sub python --limit 3 --trace
 Troubleshoot browser capture flow:
 
 ```bash
@@ -399,6 +401,8 @@ web2cli login slack --browser --browser-debug
 ```
 
 This prints live capture state (have/missing cookies, token status, tracked tabs in browser context).
+
+`--browser` automatically picks the best browser strategy (including local Chrome fallback for stricter sites) so users typically don't need extra setup.
 
 ## For LLMs
 If you are using an LLM/agent to generate a new adapter, use this flow:
@@ -409,3 +413,17 @@ If you are using an LLM/agent to generate a new adapter, use this flow:
 4. Always run `web2cli adapters validate`, `web2cli adapters lint`, and at least one command with `--trace`.
 5. Do not stop until all three checks pass and output fields look correct.
 
+### web2cli Cloud (coming soon)
+
+Building an agent for other people? Cloud handles auth so you don't have to.
+
+Your users click a link, log in to any site in a sandboxed browser,
+and your agent gets an opaque session token. No cookies touch your server.
+
+Think "OAuth for websites that don't have OAuth."
+
+→ [Join the waitlist](https://web2cli.com/cloud)
+
+---
+
+Created by [@michaloblak](https://x.com/michaloblak).
