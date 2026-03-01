@@ -39,7 +39,7 @@ $ web2cli discord send --server "My Server" --channel general --message "deploye
 ```
 
 ## Why?
-- **For agents**: HTTP GET, not Chromium. 50ms not 5s. \$0.000001 not \$0.10.
+- **For agents**: HTTP GET, not Chromium. 50ms not 5s. 10k requests for a penny.
 - **For humans**: `curl` for the modern web. Pipe, grep, script anything.
 - **For both**: One interface. `web2cli <site> <command>`. That's it.
 
@@ -47,48 +47,12 @@ $ web2cli discord send --server "My Server" --channel general --message "deploye
 pip install web2cli
 ```
 
-## Performance
-
-web2cli makes direct HTTP requests. No browser, no DOM, no screenshots.
-
-| Metric                    | Browser automation | web2cli |
-|---------------------------|:---:|:---:|
-| Fetch 10 top news from HN | ~20s (launch + render) | 0.5s |
-| Memory per request        | ~821.3MB (Chromium) | ~5MB (HTTP) |
-| Cost at 10k req/day       | \$20/day (just LLM)<br>~\$23.3/day (LLM + remote browser) | ~\$0 (HTTP) |
-| Tokens to parse           | ~8647 (HTML/DOM estimate) | ~300 (Markdown table) |
-
-### Real-world benchmarks
-
-| Task                  | Official API | Browser | web2cli | Speedup |
-|-----------------------|:------------:|:-------:|:-------:|--------:|
-| Read Discord messages | ✓ has API    | 26s     | 0.63s   | 41x     |
-| Send a Slack message  | ✓ has API    | 35s     | 0.60s   | 58x     |
-| Search X              | $100/mo API  | 75s     | 1.54s   | 50x     |
-| Search Stack Overflow | 300 req/day  | 41s     | 0.65s   | 63x     |
-| Fetch HN submissions  | partial API  | 36s     | 1.42s   | 25x     |
-
-> Some sites have great APIs. Some have expensive ones. Some have none.
-> web2cli gives you one interface for all of them
-
-### What this means for agents
-
-| Scenario                           | Browser automation | web2cli     |
-|------------------------------------|:------------------:|:-----------:|
-| Monitor Discord (1 check/min)      | $2.88/day          | $0.0015/day |
-| Scan X every 5 min, 24/7           | $1.58/day          | $0.0003/day |
-| 10k daily actions (typical bot)    | ~$50/day           | ~$0.01/day  |
-| **Monthly infra for active agent** | **$50+/mo**        | **$4/mo**   |
-
-> Browser automation is the right choice for sites that require JS rendering
-> or complex interaction flows. web2cli is for the 80% of tasks that don't.
-
 ## More code examples
 ### Daily HN top stories summary
 ```bash
 web2cli hn top --limit 3 --fields title,url --format md | \
 claude -p "For each story, fetch the URL and write a 1-sentence summary. Output as a bullet list." --allowedTools "WebFetch" | \
-web2cli discord send --server "ZENO.blue" --channel "testy-mo" > /dev/null
+web2cli discord send --server "My Server" --channel "general" > /dev/null
 ```
 
 ### Minimal Discord answering bot
@@ -146,6 +110,53 @@ while True:
     print(f"→ {reply}")
     send(reply)
 ```
+
+## Installation
+```
+pip install web2cli
+```
+
+# Verify
+```
+web2cli --version
+web2cli hn top --limit 1
+```
+
+## Performance
+
+web2cli makes direct HTTP requests. No browser, no DOM, no screenshots.
+
+| Metric                    | Browser automation | web2cli |
+|---------------------------|:---:|:---:|
+| Fetch 10 top news from HN | ~20s (launch + render) | 0.5s |
+| Memory per request        | ~821.3MB (Chromium) | ~5MB (HTTP) |
+| Cost at 10k req/day       | \$20/day (just LLM)<br>~\$23.3/day (LLM + remote browser) | ~\$0 (HTTP) |
+| Tokens to parse           | ~8647 (HTML/DOM estimate) | ~300 (Markdown table) |
+
+### Real-world benchmarks
+
+| Task                  | Official API | Browser | web2cli | Speedup |
+|-----------------------|:------------:|:-------:|:-------:|--------:|
+| Read Discord messages | ✓ has API    | 26s     | 0.63s   | 41x     |
+| Send a Slack message  | ✓ has API    | 35s     | 0.60s   | 58x     |
+| Search X              | $100/mo API  | 75s     | 1.54s   | 50x     |
+| Search Stack Overflow | 300 req/day  | 41s     | 0.65s   | 63x     |
+| Fetch HN submissions  | partial API  | 36s     | 1.42s   | 25x     |
+
+> Some sites have great APIs. Some have expensive ones. Some have none.
+> web2cli gives you one interface for all of them
+
+### What this means for agents
+
+| Scenario                           | Browser automation | web2cli     |
+|------------------------------------|:------------------:|:-----------:|
+| Monitor Discord (1 check/min)      | $2.88/day          | $0.0015/day |
+| Scan X every 5 min, 24/7           | $1.58/day          | $0.0003/day |
+| 10k daily actions (typical bot)    | ~$50/day           | ~$0.01/day  |
+| **Monthly infra for active agent** | **$50+/mo**        | **$4/mo**   |
+
+> Browser automation is the right choice for sites that require JS rendering
+> or complex interaction flows. web2cli is for the 80% of tasks that don't.
 
 ## Built-in Adapters
 Current built-in adapters and actions:
@@ -209,135 +220,13 @@ Key docs for contributors:
 - `docs/llm-adapter-playbook.md` - adapter authoring workflow for LLM agents
 - `docs/adapter-spec.schema.json` - machine-readable schema for quick structural checks
 
-## Custom Adapters Quickstart
-Create a minimal custom adapter end-to-end using `httpbin.org` (global, simple, auth-friendly test target).
+## Custom Adapters
 
-1. Create adapter directory:
-```bash
-mkdir -p ~/.web2cli/adapters/httpbin.org
-```
+Create adapters with a single YAML file. No code required for most sites.
 
-2. Create `~/.web2cli/adapters/httpbin.org/web2cli.yaml`:
-```yaml
-meta:
-  spec_version: "0.2"
-  name: httpbin
-  domain: httpbin.org
-  base_url: https://httpbin.org
-  version: 0.2.0
-  description: "HTTPBin demo adapter"
-  author: custom
-  aliases: [hb]
-  transport: http
-  impersonate: chrome
-  default_headers:
-    Accept: "application/json"
-
-auth:
-  methods:
-    - type: token
-      env_var: WEB2CLI_HTTPBIN_TOKEN
-      inject:
-        target: header
-        key: Authorization
-        prefix: "Bearer "
-    - type: cookies
-      keys: [session]
-      env_var: WEB2CLI_HTTPBIN_COOKIES
-
-commands:
-  ip:
-    description: "Show IP seen by server"
-    pipeline:
-      - request:
-          name: fetch
-          method: GET
-          url: /ip
-      - parse:
-          name: parsed
-          from: fetch
-          format: json
-          extract: "$"
-          fields:
-            - name: origin
-              from: "$.origin"
-    output:
-      from_step: parsed
-      default_fields: [origin]
-      default_format: table
-
-  bearer-check:
-    description: "Check bearer auth"
-    pipeline:
-      - request:
-          name: fetch
-          method: GET
-          url: /bearer
-      - parse:
-          name: parsed
-          from: fetch
-          format: json
-          extract: "$"
-          fields:
-            - name: authenticated
-              from: "$.authenticated"
-              default: false
-            - name: token
-              from: "$.token"
-              default: ""
-    output:
-      from_step: parsed
-      default_fields: [authenticated, token]
-      default_format: table
-
-  cookies:
-    description: "Echo cookies seen by server"
-    pipeline:
-      - request:
-          name: fetch
-          method: GET
-          url: /cookies
-      - parse:
-          name: parsed
-          from: fetch
-          format: json
-          extract: "$.cookies"
-    output:
-      from_step: parsed
-      default_format: json
-```
-
-3. Validate and lint:
-```bash
-web2cli adapters validate
-web2cli adapters lint httpbin.org
-```
-
-4. Inspect and run:
-```bash
-web2cli adapters info hb
-web2cli hb ip
-```
-
-5. Test token auth (session-based):
-```bash
-web2cli login hb --token "abc123"
-web2cli hb bearer-check --trace --verbose
-```
-
-6. Test cookie auth:
-```bash
-web2cli login hb --cookies "session=my-session"
-web2cli hb cookies --format json
-```
-
-If you prefer env vars instead of stored sessions:
-```bash
-export WEB2CLI_HTTPBIN_TOKEN="abc123"
-export WEB2CLI_HTTPBIN_COOKIES="session=my-session"
-web2cli hb bearer-check
-web2cli hb cookies
-```
+→ [Quickstart guide](docs/custom-adapters-quickstart.md)
+→ [Full adapter spec](docs/adapter-spec.md)
+→ [LLM playbook](docs/llm-adapter-playbook.md)
 
 ## Debugging and Quality
 
@@ -406,16 +295,7 @@ This prints live capture state (have/missing cookies, token status, tracked tabs
 
 `--browser` automatically picks the best browser strategy (including local Chrome fallback for stricter sites) so users typically don't need extra setup.
 
-## For LLMs
-If you are using an LLM/agent to generate a new adapter, use this flow:
-
-1. Start from `docs/llm-adapter-playbook.md` and the minimal adapter template.
-2. Prefer declarative steps (`resolve`, `request`, `fanout`, `parse`, `transform`).
-3. Avoid custom parser scripts unless declarative parsing is truly insufficient.
-4. Always run `web2cli adapters validate`, `web2cli adapters lint`, and at least one command with `--trace`.
-5. Do not stop until all three checks pass and output fields look correct.
-
-### web2cli Cloud (coming soon)
+## web2cli Cloud (coming soon)
 
 Building an agent for other people? Cloud handles auth so you don't have to.
 
