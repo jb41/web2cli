@@ -1,0 +1,52 @@
+meta:
+  spec_version: "0.2"
+  name: gmail
+  domain: mail.google.com
+  base_url: https://mail.google.com
+  version: 0.1.0
+  description: "Gmail — read your inbox from the terminal"
+  author: web2cli-core
+  transport: http
+  impersonate: chrome
+  aliases:
+    - gmail
+  default_headers:
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    Accept-Language: "en-US,en;q=0.9"
+
+auth:
+  methods:
+    - type: cookies
+      keys: [SID, HSID, SSID, OSID]
+      env_var: WEB2CLI_GMAIL_COOKIES
+
+commands:
+  inbox:
+    description: "List inbox threads (latest 50)"
+    args:
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 50
+        description: "Number of threads to show"
+    pipeline:
+      - request:
+          name: fetch
+          method: GET
+          url: /mail/u/0/
+      - parse:
+          name: parsed
+          from: fetch
+          parser: custom
+          script: parsers/inbox.py
+      - transform:
+          name: result
+          from: parsed
+          ops:
+            - limit: "{{args.limit}}"
+    output:
+      from_step: result
+      default_fields: [date, unread, sender_name, subject]
+      default_format: table

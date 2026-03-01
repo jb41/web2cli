@@ -7,8 +7,8 @@ import yaml
 from web2cli.adapter.validator import validate_adapter
 from web2cli.types import AdapterMeta, AdapterSpec, CommandArg, CommandSpec
 
-# Built-in adapters ship with the package (project root / adapters/)
-_BUILTIN_ADAPTERS_DIR = Path(__file__).resolve().parents[3] / "adapters"
+# Built-in adapters ship inside the package (src/web2cli/adapters/)
+_BUILTIN_ADAPTERS_DIR = Path(__file__).resolve().parent.parent / "adapters"
 
 # User-installed adapters live in ~/.web2cli/adapters/
 _USER_ADAPTERS_DIR = Path.home() / ".web2cli" / "adapters"

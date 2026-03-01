@@ -13,7 +13,7 @@ _PROVIDERS: dict[str, Provider] = {}
 _BUILTINS_REGISTERED = False
 _DYNAMIC_MODULES_LOADED: set[str] = set()
 
-_BUILTIN_ADAPTERS_DIR = Path(__file__).resolve().parents[3] / "adapters"
+_BUILTIN_ADAPTERS_DIR = Path(__file__).resolve().parent.parent / "adapters"
 _USER_ADAPTERS_DIR = Path.home() / ".web2cli" / "adapters"
 
 
