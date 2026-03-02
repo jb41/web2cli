@@ -335,6 +335,81 @@ commands:
       default_fields: [id, content, timestamp]
       default_format: table
 
+  watch:
+    description: "Stream new messages from a channel in real-time"
+    mode: watch
+    poll_interval: 5
+    dedup_key: id
+    args:
+      server:
+        type: string
+        required: true
+        description: "Server name"
+      channel:
+        type: string
+        required: true
+        description: "Channel name"
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 100
+        description: "Number of messages per poll"
+    pipeline:
+      - resolve:
+          name: guild
+          resource: guilds
+          input: "{{args.server}}"
+          by: name
+          value: id
+          match: ci_equals
+      - resolve:
+          name: channel
+          resource: guild_channels
+          input: "{{args.channel}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: GET
+          url: /channels/{{steps.channel.id}}/messages
+          params:
+            limit: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$[*]"
+          fields:
+            - name: author
+              from:
+                coalesce:
+                  - "$.author.global_name"
+                  - "$.author.username"
+            - name: content
+              from: "$.content"
+              ops:
+                - append_urls:
+                    path: "$.attachments[*].url"
+                    sep: " "
+            - name: timestamp
+              from: "$.timestamp"
+              transform: timestamp
+            - name: reactions
+              from: "$.reactions[*].emoji.name"
+              ops:
+                - join:
+                    sep: " "
+            - name: type
+              from: "$.type"
+            - name: id
+              from: "$.id"
+    output:
+      from_step: parsed
+      default_fields: [author, content, timestamp, id]
+      default_format: json
+
   dm:
     description: "List DM conversations"
     pipeline:

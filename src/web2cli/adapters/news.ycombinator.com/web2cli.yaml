@@ -115,6 +115,61 @@ commands:
       default_fields: [rank, title, score, author, url]
       default_format: table
 
+  watch:
+    description: "Stream new stories as they appear"
+    mode: watch
+    poll_interval: 30
+    dedup_key: id
+    args:
+      type:
+        type: string
+        required: false
+        default: top
+        enum: [top, new]
+        description: "Story type to watch (top or new)"
+      limit:
+        type: int
+        required: false
+        default: 10
+        max: 30
+        description: "Number of stories per poll"
+    pipeline:
+      - request:
+          name: ids
+          method: GET
+          url: /{{args.type}}stories.json
+      - fanout:
+          name: items
+          items_from: "{{steps.ids.json}}"
+          limit: "{{args.limit}}"
+          request:
+            method: GET
+            url: /item/{{item}}.json
+      - parse:
+          name: parsed
+          from: items
+          format: json_list
+          fields:
+            - name: title
+              from: "$.title"
+            - name: score
+              from: "$.score"
+            - name: author
+              from: "$.by"
+            - name: comments
+              from: "$.descendants"
+            - name: url
+              from: "$.url"
+            - name: id
+              from: "$.id"
+            - name: hn_url
+              from: "$.id"
+              template: "https://news.ycombinator.com/item?id={{value}}"
+    output:
+      from_step: parsed
+      default_fields: [title, score, author, url, id]
+      default_format: json
+
   item:
     description: "Get a single HN item (story, comment, job)"
     args:
