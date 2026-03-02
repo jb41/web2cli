@@ -30,6 +30,22 @@ def validate_adapter(spec: AdapterSpec, adapter_dir: Path) -> None:
 
     # Validate commands
     for cmd_name, cmd in spec.commands.items():
+        # Validate watch mode fields
+        if cmd.mode is not None and cmd.mode != "watch":
+            raise AdapterValidationError(
+                f"Command '{cmd_name}': unsupported mode '{cmd.mode}'. "
+                f"Supported: watch"
+            )
+        if cmd.mode == "watch":
+            if not cmd.dedup_key:
+                raise AdapterValidationError(
+                    f"Command '{cmd_name}': watch mode requires 'dedup_key'"
+                )
+            if cmd.poll_interval < 1:
+                raise AdapterValidationError(
+                    f"Command '{cmd_name}': poll_interval must be >= 1"
+                )
+
         # Validate command args
         stdin_count = 0
         for arg_name, arg in cmd.args.items():

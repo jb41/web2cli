@@ -297,6 +297,77 @@ commands:
       default_fields: [ok, channel, timestamp]
       default_format: table
 
+  watch:
+    description: "Stream new messages from a channel in real-time"
+    mode: watch
+    poll_interval: 5
+    dedup_key: ts
+    args:
+      channel:
+        type: string
+        required: true
+        description: "Channel name"
+      limit:
+        type: int
+        required: false
+        default: 20
+        max: 200
+        description: "Number of messages per poll"
+    pipeline:
+      - resolve:
+          name: users
+          resource: users
+          input: null
+          by: id
+          value: name
+      - resolve:
+          name: channel
+          resource: channels
+          input: "{{args.channel}}"
+          by: name
+          value: id
+          match: ci_equals
+      - request:
+          name: fetch
+          method: POST
+          url: /conversations.history
+          body:
+            encoding: form
+            template:
+              channel: "{{steps.channel.id}}"
+              limit: "{{args.limit}}"
+      - parse:
+          name: parsed
+          from: fetch
+          format: json
+          extract: "$.messages[*]"
+          fields:
+            - name: author
+              from: "$.user"
+              ops:
+                - map_lookup:
+                    from: "steps.users.map_by_id"
+                    default: unknown
+            - name: content
+              from: "$.text"
+            - name: timestamp
+              from: "$.ts"
+              transform: timestamp
+            - name: reactions
+              from: "$.reactions[*].name"
+              ops:
+                - join:
+                    sep: " "
+            - name: type
+              from: "$.subtype"
+              default: message
+            - name: ts
+              from: "$.ts"
+    output:
+      from_step: parsed
+      default_fields: [author, content, timestamp, ts]
+      default_format: json
+
   dm:
     description: "List DM conversations"
     pipeline:

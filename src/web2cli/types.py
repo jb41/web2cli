@@ -51,6 +51,9 @@ class CommandSpec:
     args: dict[str, CommandArg]
     output: dict  # raw YAML output section
     pipeline: list[dict] = field(default_factory=list)  # v0.2 step pipeline
+    mode: str | None = None  # "watch" for streaming mode
+    poll_interval: int = 5  # seconds between polls (watch mode)
+    dedup_key: str | None = None  # field to deduplicate on (watch mode)
 
 
 @dataclass

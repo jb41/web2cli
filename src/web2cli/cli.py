@@ -1,6 +1,7 @@
 """CLI entry point for web2cli."""
 
 import asyncio
+import json
 from typing import Any
 
 import typer
@@ -35,7 +36,7 @@ from web2cli.executor.http import HttpError
 from web2cli.output.formatter import format_output
 from web2cli.pipe import read_stdin
 from web2cli.types import AdapterSpec, CommandArg, CommandSpec
-from web2cli.runtime.engine import execute_command
+from web2cli.runtime.engine import execute_command, execute_watch
 
 err = Console(stderr=True)
 
@@ -200,7 +201,8 @@ GLOBAL_FLAGS_HELP = """\
   --trace            Show pipeline step trace (debug)
   --verbose          Show request URL, params, and timing
   --no-color         Disable colors and use ASCII table borders
-  --no-header        Omit header row (csv only)"""
+  --no-header        Omit header row (csv only)
+  --poll-interval    Override poll interval in seconds (watch mode only)"""
 
 
 def print_adapter_info(adapter: AdapterSpec) -> None:
@@ -210,7 +212,8 @@ def print_adapter_info(adapter: AdapterSpec) -> None:
         err.print(f"  aliases: {aliases}")
     err.print(f"\n[bold]Commands:[/bold]")
     for name, cmd in adapter.commands.items():
-        err.print(f"  {name:15} {cmd.description}")
+        mode_tag = " [dim][watch][/dim]" if cmd.mode == "watch" else ""
+        err.print(f"  {name:15} {cmd.description}{mode_tag}")
     err.print()
     err.print(GLOBAL_FLAGS_HELP)
     err.print()
@@ -567,6 +570,13 @@ def print_command_help(adapter: AdapterSpec, cmd: CommandSpec) -> None:
             pipe_str = "  [dim]pipeable[/dim]" if "stdin" in arg.source else ""
             err.print(f"  --{name:15} {arg.type:10} {desc}{enum_str}  ({req}){pipe_str}")
 
+    if cmd.mode == "watch":
+        err.print(f"\n[bold]Watch mode:[/bold]")
+        err.print(f"  poll_interval: {cmd.poll_interval}s")
+        err.print(f"  dedup_key: {cmd.dedup_key}")
+        err.print(f"  output: NDJSON (one JSON object per line)")
+        err.print(f"  Override poll interval with --poll-interval <seconds>")
+
     available_fields, default_fields, fields_complete = _infer_command_fields(adapter, cmd)
     if available_fields:
         default_set = set(default_fields)
@@ -689,6 +699,55 @@ def run_command(
 
     # --- Load session (if adapter supports auth) ---
     session = get_session(adapter.meta.domain, adapter.auth)
+
+    # --- Watch mode ---
+    if cmd_spec.mode == "watch":
+        poll_override = extra_globals.get("poll_interval")
+        poll_interval: int | None = None
+        if poll_override is not None:
+            try:
+                poll_interval = int(poll_override)
+            except (ValueError, TypeError):
+                err.print("[red]--poll-interval expects an integer (seconds)[/red]")
+                raise typer.Exit(1)
+            if poll_interval < 1:
+                err.print("[red]--poll-interval must be at least 1 second[/red]")
+                raise typer.Exit(1)
+
+        output_spec = cmd_spec.output
+        show_fields_list = (
+            fields.split(",") if fields
+            else output_spec.get("default_fields")
+        )
+
+        def _status(msg: str) -> None:
+            err.print(f"[dim]{msg}[/dim]")
+
+        err.print(
+            f"[bold]Watching {adapter.meta.name} {cmd_spec.name}[/bold] "
+            f"(Ctrl+C to stop)"
+        )
+
+        try:
+            for new_records in execute_watch(
+                adapter=adapter,
+                cmd=cmd_spec,
+                args=command_args,
+                session=session,
+                poll_interval=poll_interval,
+                verbose=verbose,
+                trace=trace,
+                no_truncate=no_truncate,
+                status_cb=_status,
+            ):
+                for record in new_records:
+                    if show_fields_list:
+                        record = {k: record.get(k) for k in show_fields_list}
+                    print(json.dumps(record, ensure_ascii=False), flush=True)
+        except KeyboardInterrupt:
+            err.print("\n[yellow]Watch stopped.[/yellow]")
+            raise typer.Exit(0)
+        return
 
     try:
         run_result = execute_command(

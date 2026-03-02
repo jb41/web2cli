@@ -83,12 +83,19 @@ def _parse_command(name: str, raw: dict) -> CommandSpec:
     raw_args = raw.get("args", {})
     args = {k: _parse_command_arg(k, v) for k, v in raw_args.items()}
 
+    mode = raw.get("mode")
+    poll_interval = raw.get("poll_interval", 5)
+    dedup_key = raw.get("dedup_key")
+
     return CommandSpec(
         name=name,
         description=raw.get("description", ""),
         args=args,
         output=raw.get("output", {}),
         pipeline=raw.get("pipeline", []),
+        mode=mode,
+        poll_interval=int(poll_interval),
+        dedup_key=dedup_key,
     )
 
 

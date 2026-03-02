@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import copy
 import json
+import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Generator
 
 import jmespath
 
@@ -741,3 +743,83 @@ def execute_command(
         last_response_body=last_body,
         trace_lines=(trace_lines if trace else None),
     )
+
+
+def execute_watch(
+    adapter: AdapterSpec,
+    cmd: CommandSpec,
+    args: dict[str, Any],
+    session: Session | None,
+    poll_interval: int | None = None,
+    verbose: bool = False,
+    trace: bool = False,
+    no_truncate: bool = False,
+    status_cb: Callable[[str], None] | None = None,
+) -> Generator[list[dict[str, Any]], None, None]:
+    """Execute a watch-mode command, yielding new records each poll cycle.
+
+    Deduplicates by cmd.dedup_key. Yields only unseen records.
+    Caller should iterate and handle KeyboardInterrupt.
+    """
+    dedup_key = cmd.dedup_key or "id"
+    interval = poll_interval if poll_interval is not None else cmd.poll_interval
+    max_seen = 10_000
+    seen_order: collections.deque[str] = collections.deque(maxlen=max_seen)
+    seen: set[str] = set()
+    first_poll = True
+    consecutive_errors = 0
+    max_backoff = 300
+
+    def _add_seen(key: str) -> None:
+        if len(seen) >= max_seen:
+            oldest = seen_order.popleft()
+            seen.discard(oldest)
+        seen.add(key)
+        seen_order.append(key)
+
+    while True:
+        try:
+            result = execute_command(
+                adapter=adapter,
+                cmd=cmd,
+                args=args,
+                session=session,
+                verbose=verbose,
+                trace=trace,
+                no_truncate=no_truncate,
+            )
+            consecutive_errors = 0
+        except Exception as exc:
+            consecutive_errors += 1
+            sleep_time = interval
+            if consecutive_errors >= 5:
+                sleep_time = min(interval * (2 ** (consecutive_errors - 4)), max_backoff)
+            if status_cb:
+                status_cb(f"error ({consecutive_errors}): {exc}")
+            time.sleep(sleep_time)
+            continue
+
+        if trace and result.trace_lines:
+            for line in result.trace_lines:
+                if status_cb:
+                    status_cb(line)
+
+        new_records: list[dict[str, Any]] = []
+        for record in result.records:
+            key_val = str(record.get(dedup_key, ""))
+            if not key_val:
+                continue
+            if key_val not in seen:
+                _add_seen(key_val)
+                if not first_poll:
+                    new_records.append(record)
+
+        if first_poll:
+            first_poll = False
+            if status_cb:
+                status_cb(f"watching (seen {len(seen)} existing, poll every {interval}s)")
+        elif new_records:
+            new_records.reverse()
+            yield new_records
+
+        time.sleep(interval)
