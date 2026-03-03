@@ -2,11 +2,14 @@
 
 **Every website is a Unix command.**
 
-Browse Hacker News, search X.com, write Discord messages, read Reddit — all from your terminal. No browser, no API keys, no $100/mo plans.
+Browse Hacker News, search X.com, write Discord messages, read Reddit - all from your terminal. No browser, no API keys, no $100/mo plans.
 
-Under the hood, web2cli is a lightweight web browser built for LLMs and agents.  It handles auth, sessions, and anti-bot protection — so your agent gets structured data in milliseconds instead of spinning up Chromium. 100x faster. 1000x cheaper.
+Under the hood, web2cli is a lightweight web browser built for LLMs and agents.  It handles auth, sessions, and anti-bot protection - so your agent gets structured data in milliseconds instead of spinning up Chromium. 100x faster. 1000x cheaper.
 
 ![DEMO](https://raw.githubusercontent.com/jb41/web2cli/main/demo.gif)
+
+> The browser was designed for humans.
+> `web2cli` was designed for machines.
 
 ```bash
 $ web2cli hn top --limit 3

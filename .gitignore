@@ -7,5 +7,7 @@ dist/
 build/
 
 dc-bot/
+node_modules/
+ROADMAP.md
 SCRATCHPAD.md
 # spec-docs
