@@ -91,6 +91,7 @@ def _is_missing_browser_error(exc: Exception) -> bool:
         "executable doesn't exist" in text
         or "chromium distribution 'chrome'" in text
         or "cannot find chromium" in text
+        or "download new browsers" in text
         or ("playwright install" in text and "chromium" in text)
     )
 
@@ -783,7 +784,17 @@ def capture_auth_with_browser(
         raise BrowserLoginCancelled("Login cancelled by user")
     except Exception as e:
         if _is_missing_browser_error(e):
-            _install_chromium(status_cb)
+            try:
+                _install_chromium(status_cb)
+            except Exception as install_error:
+                raise BrowserLoginError(
+                    "Browser engine is missing and automatic install failed.\n"
+                    "Try manual setup:\n"
+                    f"  {sys.executable} -m playwright install chromium\n"
+                    "Then verify with:\n"
+                    "  web2cli doctor browser --deep\n"
+                    f"Install error: {install_error}"
+                )
             try:
                 return asyncio.run(
                     _capture_auth_once(
