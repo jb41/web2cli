@@ -97,7 +97,7 @@ def _is_missing_browser_error(exc: Exception) -> bool:
 
 
 def _install_chromium(status_cb: Callable[[str], None] | None) -> None:
-    _emit(status_cb, "Installing browser engine (one-time, ~50MB)...")
+    _emit(status_cb, "Installing browser engine (one-time, ~250MB)...")
     _run_command([sys.executable, "-m", "playwright", "install", "chromium"])
 
 
