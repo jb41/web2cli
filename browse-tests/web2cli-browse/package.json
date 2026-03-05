@@ -1,0 +1,12 @@
+{
+  "name": "web2cli-browse",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "browse": "node browse.js",
+    "test": "node test-local.js"
+  },
+  "dependencies": {
+    "happy-dom": "^20.0.0"
+  }
+}
