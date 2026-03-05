@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * web2cli browse --snapshot (jsdom variant)
+ * web2cli browse (jsdom variant)
  *
  * Usage:
  *   node browse-jsdom.js <url>                    # snapshot a11y tree
@@ -9,11 +9,12 @@
  *   node browse-jsdom.js <url> --json             # output JSON for LLM processing
  *   node browse-jsdom.js <url> --verbose          # show timing and memory
  *   node browse-jsdom.js <url> --timeout=ms       # set custom timeout (default 10000ms)
- *   node browse-jsdom.js <url> --no-js            # skip JS execution (fast, SSR-only)
+ *   node browse-jsdom.js <url> --interactive      # REPL mode: type commands to interact
  */
 
 import pkg from "jsdom";
-const { JSDOM, ResourceLoader, VirtualConsole } = pkg;
+const { JSDOM, VirtualConsole } = pkg;
+import { createInterface } from "readline";
 
 // ============================================================
 // CONFIG
@@ -23,24 +24,33 @@ const url = process.argv[2];
 const flagHtml = process.argv.includes("--html");
 const flagVerbose = process.argv.includes("--verbose");
 const flagJson = process.argv.includes("--json");
-const flagNoJs = process.argv.includes("--no-js");
+const flagInteractive = process.argv.includes("--interactive");
 const timeout = parseInt(
   process.argv.find((a) => a.startsWith("--timeout="))?.split("=")[1] || "10000"
 );
 
 if (!url) {
   console.error(
-    "Usage: node browse-jsdom.js <url> [--html] [--json] [--verbose] [--no-js] [--timeout=ms]"
+    "Usage: node browse-jsdom.js <url> [--html] [--json] [--verbose] [--interactive] [--timeout=ms]"
   );
   process.exit(1);
 }
 
 // ============================================================
-// LOAD PAGE
+// SHARED STATE
 // ============================================================
 
-const t0 = Date.now();
-if (flagVerbose) console.error(`[browse] Loading ${url} ...`);
+let dom;
+let doc;
+let currentUrl = url;
+let lastTree = null; // keeps id→element mapping
+
+const userAgent =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// ============================================================
+// JSDOM SETUP
+// ============================================================
 
 const virtualConsole = new VirtualConsole();
 virtualConsole.on("error", (...args) => {
@@ -50,54 +60,54 @@ virtualConsole.on("warn", () => {});
 virtualConsole.on("info", () => {});
 virtualConsole.on("dir", () => {});
 
-const userAgent =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-const jsdomOptions = {
-  referrer: url,
-  userAgent,
-  runScripts: flagNoJs ? undefined : "dangerously",
-  resources: flagNoJs ? undefined : "usable",
-  pretendToBeVisual: true,
-  virtualConsole,
-  beforeParse(window) {
-    // Stub missing globals that crash page scripts
-    const nullSink = new Proxy(function () {}, {
-      get: (t, p) => {
-        if (p === Symbol.toPrimitive) return () => "";
-        if (p === Symbol.iterator) return undefined;
-        if (p === "then") return undefined;
-        return nullSink;
-      },
-      apply: () => nullSink,
-      construct: () => nullSink,
-      set: () => true,
-    });
-
-    const STUB_GLOBALS = ["InstantClick", "I18n", "isTouchDevice"];
-    for (const name of STUB_GLOBALS) {
-      if (!(name in window)) {
-        window[name] = nullSink;
-      }
-    }
-
-    // Fix navigator.platform
-    try {
-      Object.defineProperty(window.navigator, "platform", {
-        value: "MacIntel",
-        configurable: true,
+function makeJsdomOptions(pageUrl) {
+  return {
+    url: pageUrl,
+    referrer: pageUrl,
+    userAgent,
+    runScripts: "dangerously",
+    resources: "usable",
+    pretendToBeVisual: true,
+    virtualConsole,
+    beforeParse(window) {
+      const nullSink = new Proxy(function () {}, {
+        get: (t, p) => {
+          if (p === Symbol.toPrimitive) return () => "";
+          if (p === Symbol.iterator) return undefined;
+          if (p === "then") return undefined;
+          return nullSink;
+        },
+        apply: () => nullSink,
+        construct: () => nullSink,
+        set: () => true,
       });
-    } catch {}
-  },
-};
+
+      const STUB_GLOBALS = ["InstantClick", "I18n", "isTouchDevice"];
+      for (const name of STUB_GLOBALS) {
+        if (!(name in window)) {
+          window[name] = nullSink;
+        }
+      }
+
+      try {
+        Object.defineProperty(window.navigator, "platform", {
+          value: "MacIntel",
+          configurable: true,
+        });
+      } catch {}
+    },
+  };
+}
 
 // Prevent uncaught script errors from killing the process
 process.on("uncaughtException", (err) => {
   if (flagVerbose) console.error("[PAGE ERROR]", err.message);
 });
 
-// Fetch HTML — try system curl first (macOS BoringSSL passes more anti-bot checks),
-// fall back to Node fetch if curl is unavailable.
+// ============================================================
+// FETCH HTML
+// ============================================================
+
 async function fetchHTML(targetUrl) {
   const { execFileSync } = await import("child_process");
   try {
@@ -122,101 +132,89 @@ async function fetchHTML(targetUrl) {
   }
 }
 
-let dom;
-try {
-  const html = await fetchHTML(url);
-  dom = new JSDOM(html, { ...jsdomOptions, url });
-} catch (err) {
-  console.error(`[browse] Navigation error: ${err.message}`);
-  process.exit(1);
+// ============================================================
+// LOAD / NAVIGATE
+// ============================================================
+
+async function loadPage(targetUrl) {
+  const t0 = Date.now();
+  if (flagVerbose) console.error(`[browse] Loading ${targetUrl} ...`);
+
+  if (dom) {
+    try { dom.window.close(); } catch {}
+  }
+
+  const html = await fetchHTML(targetUrl);
+  dom = new JSDOM(html, makeJsdomOptions(targetUrl));
+  doc = dom.window.document;
+  currentUrl = targetUrl;
+
+  // Activate deferred content (Reddit suspense pattern)
+  activateTemplates(doc);
+
+  // Wait for DOM to stabilize
+  await waitForStable(doc);
+
+  const loadTime = Date.now() - t0;
+  if (flagVerbose) {
+    console.error(`[browse] Loaded in ${loadTime}ms`);
+    console.error(`[browse] Title: "${doc.title}"`);
+    console.error(`[browse] DOM elements: ${doc.querySelectorAll("*").length}`);
+  }
+
+  return loadTime;
 }
 
-// Activate deferred content: some sites (Reddit) put SSR content inside <template>
-// elements, activated by JS at runtime. Inline them into the live DOM so the a11y
-// tree can see them.
-{
-  const doc_ = dom.window.document;
-
-  // Strategy 1: <suspense-replace target="#id" template="selector"> pattern (Reddit)
-  for (const replacer of doc_.querySelectorAll("suspense-replace")) {
+function activateTemplates(document) {
+  for (const replacer of document.querySelectorAll("suspense-replace")) {
     const tmplSelector = replacer.getAttribute("template");
     const targetSelector = replacer.getAttribute("target");
     if (!tmplSelector || !targetSelector) continue;
-    const tmpl = doc_.querySelector(tmplSelector);
-    const target = doc_.querySelector(targetSelector);
+    const tmpl = document.querySelector(tmplSelector);
+    const target = document.querySelector(targetSelector);
     if (tmpl?.innerHTML && target) {
-      const container = doc_.createElement("div");
+      const container = document.createElement("div");
       container.innerHTML = tmpl.innerHTML;
       target.replaceWith(container);
-      if (flagVerbose) console.error(`[browse] Activated suspense content -> ${targetSelector} (${container.querySelectorAll("*").length} elements)`);
+      if (flagVerbose) console.error(`[browse] Activated suspense -> ${targetSelector}`);
     }
   }
 
-  // Strategy 2: any remaining large <template> in body (>1KB) — likely deferred SSR
-  for (const tmpl of doc_.querySelectorAll("body > template")) {
+  for (const tmpl of document.querySelectorAll("body > template")) {
     if (tmpl.innerHTML.length < 1024) continue;
-    const container = doc_.createElement("div");
+    const container = document.createElement("div");
     container.innerHTML = tmpl.innerHTML;
     tmpl.replaceWith(container);
-    if (flagVerbose) console.error(`[browse] Inlined body template (${container.querySelectorAll("*").length} elements)`);
+    if (flagVerbose) console.error(`[browse] Inlined body template`);
   }
 }
 
-const doc = dom.window.document;
-
-// Wait for DOM to stabilize (scripts may still be fetching/rendering)
-if (!flagNoJs) {
+async function waitForStable(document, timeoutMs) {
   const settleMs = 500;
-  let lastCount = doc.querySelectorAll("*").length;
+  const maxWait = timeoutMs || timeout;
+  let lastCount = document.querySelectorAll("*").length;
   let stableAt = Date.now();
 
   await new Promise((resolve) => {
     const hardTimer = setTimeout(() => {
       clearInterval(pollTimer);
-      if (flagVerbose)
-        console.error(`[browse] Timeout after ${timeout}ms — using partial DOM`);
+      if (flagVerbose) console.error(`[browse] Timeout after ${maxWait}ms — using partial DOM`);
       resolve();
-    }, timeout);
+    }, maxWait);
 
     const pollTimer = setInterval(() => {
-      const count = doc.querySelectorAll("*").length;
+      const count = document.querySelectorAll("*").length;
       if (count !== lastCount) {
         lastCount = count;
         stableAt = Date.now();
       } else if (Date.now() - stableAt >= settleMs) {
         clearInterval(pollTimer);
         clearTimeout(hardTimer);
-        if (flagVerbose)
-          console.error(
-            `[browse] DOM stabilized (${count} elements, settled for ${settleMs}ms)`
-          );
+        if (flagVerbose) console.error(`[browse] DOM stabilized (${count} elements)`);
         resolve();
       }
     }, 100);
   });
-}
-
-const loadTime = Date.now() - t0;
-
-if (flagVerbose) {
-  console.error(`[browse] Loaded in ${loadTime}ms`);
-  console.error(`[browse] Title: "${doc.title}"`);
-  console.error(
-    `[browse] DOM elements: ${doc.querySelectorAll("*").length}`
-  );
-  console.error(
-    `[browse] HTML size: ${doc.documentElement?.outerHTML?.length || 0} chars`
-  );
-}
-
-// ============================================================
-// MODE: --html
-// ============================================================
-
-if (flagHtml) {
-  console.log(doc.documentElement?.outerHTML || "");
-  dom.window.close();
-  process.exit(0);
 }
 
 // ============================================================
@@ -366,32 +364,29 @@ function extractA11yTree(root) {
 }
 
 // ============================================================
-// OUTPUT
+// SNAPSHOT — prints a11y tree + returns it
 // ============================================================
 
-const tree = extractA11yTree(doc.body);
+function refreshTree() {
+  lastTree = extractA11yTree(doc.body);
+  return lastTree;
+}
 
-if (flagJson) {
-  const output = {
-    url,
-    title: doc.title,
-    loadTime,
-    elements: doc.querySelectorAll("*").length,
-    tree: tree.nodes.map((n) => ({
-      id: n.id,
-      role: n.role,
-      name: n.name,
-      tag: n.tag,
-      depth: n.depth,
-    })),
-    interactiveCount: tree.interactiveCount,
-    memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-  };
-  console.log(JSON.stringify(output, null, 2));
-} else {
-  console.log(`Page: ${doc.title || url}`);
+function printStatus() {
+  const elCount = doc.querySelectorAll("*").length;
+  const interactive = lastTree ? lastTree.interactiveCount : "?";
+  console.log(`  Page: ${doc.title || "(no title)"}`);
+  console.log(`  URL:  ${currentUrl}`);
+  console.log(`  DOM:  ${elCount} elements | Interactive: ${interactive}`);
+}
+
+function snapshot() {
+  const tree = refreshTree();
+
+  console.log(`\nPage: ${doc.title || currentUrl}`);
+  console.log(`URL: ${currentUrl}`);
   console.log(
-    `Loaded: ${loadTime}ms | DOM: ${doc.querySelectorAll("*").length} elements | Interactive: ${tree.interactiveCount}`
+    `DOM: ${doc.querySelectorAll("*").length} elements | Interactive: ${tree.interactiveCount}`
   );
   console.log();
 
@@ -400,16 +395,286 @@ if (flagJson) {
   }
 
   console.log();
-  console.log(
-    `(${tree.lines.length} nodes, ${tree.interactiveCount} interactive)`
-  );
+  console.log(`(${tree.lines.length} nodes, ${tree.interactiveCount} interactive)`);
 
-  const mem = process.memoryUsage();
-  if (flagVerbose) {
-    console.error(
-      `\n[browse] RSS: ${Math.round(mem.rss / 1024 / 1024)}MB | Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB`
-    );
+  return tree;
+}
+
+// ============================================================
+// ACTIONS
+// ============================================================
+
+function findNode(id) {
+  if (!lastTree) return null;
+  return lastTree.nodes.find((n) => n.id === id) || null;
+}
+
+function resolveUrl(href) {
+  try {
+    return new URL(href, currentUrl).href;
+  } catch {
+    return href;
   }
+}
+
+async function execClick(id) {
+  const node = findNode(id);
+  if (!node) {
+    console.error(`Error: no interactive element with id [${id}]`);
+    return;
+  }
+
+  const el = node.element;
+  const tag = node.tag;
+  console.log(`  Clicked [${id}] ${node.role} "${node.name}"`);
+
+  // If it's a link, check if there's a JS handler or if we need to navigate
+  if (tag === "a") {
+    const href = el.getAttribute("href") || "";
+    const hasJsHandler = el.onclick || el.getAttribute("onclick");
+
+    // Fire the click event — JS handlers will run
+    el.click();
+
+    // Short wait to let SPA routers do their thing
+    await waitForStable(doc, 2000);
+
+    // Check if location changed (SPA navigation)
+    const newUrl = dom.window.location.href;
+    if (newUrl !== currentUrl && newUrl !== "about:blank") {
+      currentUrl = newUrl;
+    } else if (!hasJsHandler && href && !href.startsWith("#") && !href.startsWith("javascript:")) {
+      // No SPA handler caught it — do a full navigation
+      const fullUrl = resolveUrl(href);
+      await loadPage(fullUrl);
+    }
+  } else if (tag === "button" && el.closest("form") &&
+    (el.getAttribute("type") || "submit") === "submit") {
+    // Submit button inside a form — delegate to submit
+    return execSubmit(id);
+  } else {
+    // Button, summary, etc. — just click it
+    el.click();
+    await waitForStable(doc, 2000);
+
+    // Check if click triggered navigation
+    const newUrl = dom.window.location.href;
+    if (newUrl !== currentUrl && newUrl !== "about:blank") {
+      currentUrl = newUrl;
+    }
+  }
+
+  refreshTree();
+  printStatus();
+}
+
+async function execType(id, text) {
+  const node = findNode(id);
+  if (!node) {
+    console.error(`Error: no interactive element with id [${id}]`);
+    return;
+  }
+
+  const el = node.element;
+  el.focus();
+
+  // Set the value
+  el.value = text;
+
+  // Dispatch events that frameworks listen for
+  el.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  el.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+
+  console.log(`  Typed "${text}" into [${id}] ${node.role} "${node.name}"`);
+  await waitForStable(doc, 2000);
+  refreshTree();
+}
+
+async function execSubmit(id) {
+  const node = findNode(id);
+  if (!node) {
+    console.error(`Error: no interactive element with id [${id}]`);
+    return;
+  }
+
+  const el = node.element;
+
+  // Find the form — either the element itself or the closest ancestor form
+  const form = el.tagName.toLowerCase() === "form" ? el : el.closest("form");
+
+  if (form) {
+    // Try dispatching submit event first (frameworks often intercept this)
+    const evt = new dom.window.Event("submit", { bubbles: true, cancelable: true });
+    const cancelled = !form.dispatchEvent(evt);
+
+    if (!cancelled) {
+      // No JS handler caught it — extract form action and do a navigation
+      const action = resolveUrl(form.getAttribute("action") || currentUrl);
+      const method = (form.getAttribute("method") || "GET").toUpperCase();
+
+      if (method === "GET") {
+        const formData = new dom.window.FormData(form);
+        const params = new URLSearchParams(formData);
+        const navUrl = `${action}?${params.toString()}`;
+        console.error(`[browse] Form GET -> ${navUrl}`);
+        await loadPage(navUrl);
+      } else {
+        console.error(`[browse] Form POST -> ${action} (re-fetching as GET for now)`);
+        await loadPage(action);
+      }
+    } else {
+      // JS handler took over — wait and re-snapshot
+      await waitForStable(doc, 2000);
+    }
+  } else {
+    // No form — just click the element (like a submit button outside a form)
+    el.click();
+    await waitForStable(doc, 2000);
+  }
+
+  refreshTree();
+  printStatus();
+}
+
+async function execGoto(targetUrl) {
+  const fullUrl = resolveUrl(targetUrl);
+  await loadPage(fullUrl);
+  refreshTree();
+  printStatus();
+}
+
+// ============================================================
+// INTERACTIVE REPL
+// ============================================================
+
+async function interactiveLoop() {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr,
+    prompt: "browse> ",
+  });
+
+  console.error("\nInteractive mode. Commands:");
+  console.error("  click <id>          — click an interactive element");
+  console.error("  type <id> <text>    — type text into an input");
+  console.error("  submit <id>         — submit a form (by element in/near form)");
+  console.error("  goto <url>          — navigate to a URL");
+  console.error("  snapshot            — re-print the a11y tree");
+  console.error("  done                — exit\n");
+
+  rl.prompt();
+
+  const processLine = async (trimmed) => {
+    if (!trimmed) return true;
+
+    const parts = trimmed.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+
+    if (cmd === "done" || cmd === "exit" || cmd === "quit") {
+      return false;
+    } else if (cmd === "snapshot" || cmd === "s") {
+      snapshot();
+    } else if (cmd === "click" || cmd === "c") {
+      const id = parseInt(parts[1]);
+      if (isNaN(id)) {
+        console.error("Usage: click <id>");
+      } else {
+        await execClick(id);
+      }
+    } else if (cmd === "type" || cmd === "t") {
+      const id = parseInt(parts[1]);
+      const text = parts.slice(2).join(" ");
+      if (isNaN(id)) {
+        console.error("Usage: type <id> <text>");
+      } else {
+        await execType(id, text);
+      }
+    } else if (cmd === "submit") {
+      const id = parseInt(parts[1]);
+      if (isNaN(id)) {
+        console.error("Usage: submit <id>");
+      } else {
+        await execSubmit(id);
+      }
+    } else if (cmd === "goto" || cmd === "go") {
+      if (!parts[1]) {
+        console.error("Usage: goto <url>");
+      } else {
+        await execGoto(parts[1]);
+      }
+    } else {
+      console.error(`Unknown command: ${cmd}`);
+    }
+    return true;
+  };
+
+  return new Promise((resolve) => {
+    rl.on("line", async (line) => {
+      rl.pause();
+      try {
+        const cont = await processLine(line.trim());
+        if (!cont) {
+          rl.close();
+          return;
+        }
+      } catch (err) {
+        console.error(`Error: ${err.message}`);
+      }
+      rl.prompt();
+    });
+
+    rl.on("close", resolve);
+    rl.prompt();
+  });
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+
+try {
+  const loadTime = await loadPage(url);
+
+  if (flagHtml) {
+    console.log(doc.documentElement?.outerHTML || "");
+    dom.window.close();
+    process.exit(0);
+  }
+
+  if (flagJson) {
+    const tree = extractA11yTree(doc.body);
+    const output = {
+      url: currentUrl,
+      title: doc.title,
+      loadTime,
+      elements: doc.querySelectorAll("*").length,
+      tree: tree.nodes.map((n) => ({
+        id: n.id,
+        role: n.role,
+        name: n.name,
+        tag: n.tag,
+        depth: n.depth,
+      })),
+      interactiveCount: tree.interactiveCount,
+      memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+    };
+    console.log(JSON.stringify(output, null, 2));
+    dom.window.close();
+    process.exit(0);
+  }
+
+  if (flagInteractive) {
+    // In interactive mode, show short status instead of full snapshot
+    refreshTree();
+    printStatus();
+    await interactiveLoop();
+  } else {
+    // One-shot mode: print full snapshot
+    snapshot();
+  }
+} catch (err) {
+  console.error(`[browse] Fatal: ${err.message}`);
+  process.exit(1);
 }
 
 dom.window.close();
