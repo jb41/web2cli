@@ -15,6 +15,7 @@
 import pkg from "jsdom";
 const { JSDOM, VirtualConsole } = pkg;
 import { createInterface } from "readline";
+import TurndownService from "turndown";
 
 // ============================================================
 // CONFIG
@@ -536,6 +537,24 @@ async function execSubmit(id) {
   printStatus();
 }
 
+function execContent() {
+  const td = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+  });
+  td.remove(["script", "style", "nav", "noscript", "svg"]);
+
+  // Try to find main content area, skip nav/sidebar
+  const contentRoot =
+    doc.querySelector("article") ||
+    doc.querySelector("main") ||
+    doc.querySelector("[role='main']") ||
+    doc.body;
+
+  const md = td.turndown(contentRoot.innerHTML);
+  console.log(md);
+}
+
 async function execGoto(targetUrl) {
   const fullUrl = resolveUrl(targetUrl);
   await loadPage(fullUrl);
@@ -559,7 +578,8 @@ async function interactiveLoop() {
   console.error("  type <id> <text>    — type text into an input");
   console.error("  submit <id>         — submit a form (by element in/near form)");
   console.error("  goto <url>          — navigate to a URL");
-  console.error("  snapshot            — re-print the a11y tree");
+  console.error("  snapshot / s        — re-print the a11y tree");
+  console.error("  content             — page content as markdown");
   console.error("  done                — exit\n");
 
   rl.prompt();
@@ -572,6 +592,8 @@ async function interactiveLoop() {
 
     if (cmd === "done" || cmd === "exit" || cmd === "quit") {
       return false;
+    } else if (cmd === "content") {
+      execContent();
     } else if (cmd === "snapshot" || cmd === "s") {
       snapshot();
     } else if (cmd === "click" || cmd === "c") {
