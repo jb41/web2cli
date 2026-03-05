@@ -55,6 +55,7 @@ const browser = new Browser({
     enableJavaScriptEvaluation: true,
     suppressInsecureJavaScriptEnvironmentWarning: true,
     disableCSSFileLoading: true,
+    handleDisabledFileLoadingAsSuccess: true,
     navigator: {
       userAgent:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -88,27 +89,106 @@ if (flagCookies) {
   if (flagVerbose) console.error(`[browse] Loaded ${cookieData.length} cookies`);
 }
 
-const virtualConsole = page.mainFrame.window.console;
-const origError = virtualConsole.error;
-virtualConsole.error = (...args) => {
-  console.error('[PAGE ERROR]', ...args);
-  origError?.apply(virtualConsole, args);
-};
+// Proxy "black hole" — absorbs any property access / method call without throwing.
+// Used to stub missing globals (InstantClick, I18n, etc.) so dependent scripts
+// don't crash. Only assigned to names that were never defined by real libraries.
+const nullSink = new Proxy(function () {}, {
+  get: (t, p) => {
+    if (p === Symbol.toPrimitive) return () => "";
+    if (p === Symbol.iterator) return undefined;
+    if (p === "then") return undefined; // prevent Promise resolution loops
+    return nullSink;
+  },
+  apply: () => nullSink,
+  construct: () => nullSink,
+  set: () => true,
+});
+
+// Known missing globals that crash page scripts — add more as discovered.
+const STUB_GLOBALS = ["InstantClick", "I18n", "isTouchDevice"];
+
+// Inject stubs into the NEW window created by goto(), before HTML is parsed.
+// page.goto() creates a fresh window, so we use beforeContentCallback to
+// install stubs before any <script> tags execute.
+function setupWindow(win) {
+  // Inject native V8 globals that happy-dom's VM context doesn't expose.
+  // Without these, sites detect "Browser-Unsupported" and skip rendering.
+  const nativeGlobals = { Proxy, WeakRef, WeakMap, WeakSet, Symbol, BigInt, SharedArrayBuffer, Atomics };
+  for (const [name, val] of Object.entries(nativeGlobals)) {
+    if (val !== undefined && !(name in win)) {
+      win[name] = val;
+    }
+  }
+
+  // Fix navigator.platform — happy-dom sets it to the full UA platform string
+  // but real browsers return short values like "MacIntel", "Win32", "Linux x86_64"
+  try {
+    Object.defineProperty(win.navigator, "platform", { value: "MacIntel", configurable: true });
+  } catch {}
+
+
+  for (const name of STUB_GLOBALS) {
+    if (!(name in win)) {
+      win[name] = nullSink;
+    }
+  }
+
+  // Forward page console.error to our stderr
+  const virtualConsole = win.console;
+  const origError = virtualConsole.error;
+  virtualConsole.error = (...args) => {
+    console.error('[PAGE ERROR]', ...args);
+    origError?.apply(virtualConsole, args);
+  };
+}
 
 try {
-  await page.goto(url);
-  
-  // Race between waitUntilComplete and timeout
-  await Promise.race([
-    page.waitUntilComplete(),
-    new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Timeout')), timeout)
-    ),
-  ]).catch(err => {
-    if (flagVerbose) console.error(`[browse] ${err.message} after ${timeout}ms — using partial DOM`);
-    // Abort remaining operations
-    page.abort();
+  await page.goto(url, {
+    beforeContentCallback: setupWindow,
   });
+  
+  // Wait strategy: first try waitUntilComplete with a short timeout to let
+  // scripts load and execute, then fall back to DOM stabilization polling.
+  const shortTimeout = Math.min(5000, timeout);
+  const settleMs = 500;
+  const doc_ = page.mainFrame.document;
+
+  // Phase 1: give scripts time to load and execute
+  const completed = await Promise.race([
+    page.waitUntilComplete().then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), shortTimeout)),
+  ]);
+
+  if (completed) {
+    if (flagVerbose) console.error(`[browse] Page fully loaded`);
+  } else {
+    // Phase 2: scripts may still be running — wait for DOM to settle
+    if (flagVerbose) console.error(`[browse] Scripts still running after ${shortTimeout}ms — waiting for DOM to settle`);
+    let lastCount = doc_.querySelectorAll("*").length;
+    let stableAt = Date.now();
+
+    await new Promise((resolve) => {
+      const hardTimer = setTimeout(() => {
+        clearInterval(pollTimer);
+        if (flagVerbose) console.error(`[browse] Timeout after ${timeout}ms — using partial DOM`);
+        resolve();
+      }, timeout - shortTimeout);
+
+      const pollTimer = setInterval(() => {
+        const count = doc_.querySelectorAll("*").length;
+        if (count !== lastCount) {
+          lastCount = count;
+          stableAt = Date.now();
+        } else if (Date.now() - stableAt >= settleMs) {
+          clearInterval(pollTimer);
+          clearTimeout(hardTimer);
+          if (flagVerbose) console.error(`[browse] DOM stabilized (${count} elements, settled for ${settleMs}ms)`);
+          resolve();
+        }
+      }, 100);
+    });
+  }
+  page.abort();
 } catch (err) {
   console.error(`[browse] Navigation error: ${err.message}`);
 }
