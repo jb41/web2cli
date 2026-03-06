@@ -547,7 +547,7 @@ async function execSubmit(id) {
   printStatus();
 }
 
-function execContent() {
+function getContentMarkdown() {
   const td = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
@@ -561,8 +561,11 @@ function execContent() {
     doc.querySelector("[role='main']") ||
     doc.body;
 
-  const md = td.turndown(contentRoot.innerHTML);
-  console.log(md);
+  return td.turndown(contentRoot.innerHTML);
+}
+
+function execContent() {
+  console.log(getContentMarkdown());
 }
 
 async function execGoto(targetUrl) {
@@ -664,12 +667,14 @@ async function interactiveLoop() {
 // LLM AGENT LOOP (--task)
 // ============================================================
 
-const AGENT_SYSTEM = `You are a web navigation agent. You interact with web pages through an accessibility tree.
-Use the provided tools to navigate and interact with the page.
-Use element [id] numbers from the accessibility tree.
+const AGENT_SYSTEM = `You are a web navigation agent.
+At each step, choose exactly one tool call.
+Use element [id] numbers from the current accessibility tree only.
+Do not rely on element IDs from previous steps.
 When typing into search boxes, use submit or click the search button after.
-If the page doesn't have what you need, try navigating or searching.
-When the task is complete, call the done tool with a summary.`;
+If the page does not have what you need, navigate or search.
+If the task is complete, call done with a concise summary.
+Do not answer with plain text without a tool call.`;
 
 const AGENT_TOOLS = [
   {
@@ -745,18 +750,158 @@ const AGENT_TOOLS = [
   },
 ];
 
-function buildUserMessage(task, tree) {
-  let msg = `TASK: ${task}\n\n`;
-  msg += `PAGE: ${doc.title || "(no title)"}\n`;
-  msg += `URL: ${currentUrl}\n\n`;
-  msg += `ACCESSIBILITY TREE:\n`;
+const LLM_MODEL = process.env.OPENROUTER_MODEL;
+const LLM_PROVIDER = process.env.OPENROUTER_PROVIDER || "groq";
+const ACTION_HISTORY_LIMIT = Math.max(
+  1,
+  parseInt(process.env.AGENT_HISTORY_LIMIT || "5", 10) || 5
+);
+
+function capturePageState(tree) {
+  return {
+    title: doc.title || "(no title)",
+    url: currentUrl,
+    elements: doc.querySelectorAll("*").length,
+    interactiveCount: tree?.interactiveCount ?? 0,
+  };
+}
+
+function formatActionArgs(args) {
+  try {
+    return JSON.stringify(args || {});
+  } catch {
+    return "{}";
+  }
+}
+
+function formatTargetLabel(node) {
+  if (!node) return "";
+  let label = `[${node.id}] ${node.role}`;
+  if (node.name) label += ` "${node.name}"`;
+  return label;
+}
+
+function summarizePageChange(before, after) {
+  const parts = [];
+
+  if (before.url === after.url) {
+    parts.push(`url unchanged (${after.url})`);
+  } else {
+    parts.push(`url: ${before.url} -> ${after.url}`);
+  }
+
+  if (before.title === after.title) {
+    parts.push(`title unchanged (${after.title})`);
+  } else {
+    parts.push(`title: ${JSON.stringify(before.title)} -> ${JSON.stringify(after.title)}`);
+  }
+
+  if (before.elements !== after.elements) {
+    parts.push(`elements: ${before.elements} -> ${after.elements}`);
+  }
+
+  if (before.interactiveCount !== after.interactiveCount) {
+    parts.push(`interactive: ${before.interactiveCount} -> ${after.interactiveCount}`);
+  }
+
+  return parts.join("; ");
+}
+
+function formatActionRecord(record, includeResult = true) {
+  let line = `${record.tool} ${formatActionArgs(record.args)}`;
+  if (record.targetLabel) {
+    line += ` on ${record.targetLabel}`;
+  }
+  if (includeResult && record.resultSummary) {
+    line += ` -> ${record.resultSummary}`;
+  }
+  return line;
+}
+
+function buildUserMessage(task, step, history, tree) {
+  const page = capturePageState(tree);
+  let msg = `TASK\n${task}\n\n`;
+  msg += `STEP\n${step}\n\n`;
+  msg += `CURRENT PAGE\n`;
+  msg += `Title: ${page.title}\n`;
+  msg += `URL: ${page.url}\n`;
+  msg += `Elements: ${page.elements}\n`;
+  msg += `Interactive: ${page.interactiveCount}\n\n`;
+
+  if (history.length > 0) {
+    const last = history[history.length - 1];
+    const recent = history.slice(-ACTION_HISTORY_LIMIT);
+
+    msg += `LAST ACTION\n${formatActionRecord(last, false)}\n\n`;
+    msg += `LAST RESULT\n${last.resultSummary}\n\n`;
+
+    if (last.outputText) {
+      msg += `LAST TOOL OUTPUT\n${last.outputText}\n\n`;
+    }
+
+    msg += `RECENT ACTIONS\n`;
+    for (const record of recent) {
+      msg += `${record.step}. ${formatActionRecord(record)}\n`;
+    }
+    msg += `\n`;
+  }
+
+  msg += `CURRENT ACCESSIBILITY TREE\n`;
   for (const line of tree.lines) {
     msg += line + "\n";
   }
   return msg;
 }
 
-const LLM_MODEL = process.env.OPENROUTER_MODEL;
+function sanitizeToolCall(toolCall) {
+  if (!toolCall?.function?.name) return null;
+  return {
+    id: toolCall.id,
+    type: "function",
+    function: {
+      name: toolCall.function.name,
+      arguments: typeof toolCall.function.arguments === "string"
+        ? toolCall.function.arguments
+        : JSON.stringify(toolCall.function.arguments || {}),
+    },
+  };
+}
+
+function sanitizeMessage(message) {
+  if (!message?.role) return null;
+
+  if (message.role === "assistant") {
+    const sanitized = { role: "assistant" };
+
+    if (message.content !== undefined) {
+      sanitized.content = message.content;
+    }
+
+    if (Array.isArray(message.tool_calls)) {
+      const toolCalls = message.tool_calls
+        .map(sanitizeToolCall)
+        .filter(Boolean);
+      if (toolCalls.length > 0) {
+        sanitized.tool_calls = toolCalls;
+      }
+    }
+
+    return sanitized;
+  }
+
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      tool_call_id: message.tool_call_id,
+      content: message.content ?? "",
+    };
+  }
+
+  return {
+    role: message.role,
+    content: message.content ?? "",
+  };
+}
 
 async function callLLM(messages) {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -773,7 +918,11 @@ async function callLLM(messages) {
     },
     body: JSON.stringify({
       model: LLM_MODEL,
-      messages,
+      messages: messages.map(sanitizeMessage).filter(Boolean),
+      provider: {
+        only: [LLM_PROVIDER],
+        allow_fallbacks: false,
+      },
       tools: AGENT_TOOLS,
       temperature: 0,
       max_tokens: 1024,
@@ -798,31 +947,26 @@ async function callLLM(messages) {
 
 async function agentLoop(task) {
   const maxSteps = 15;
-  const messages = [
-    { role: "system", content: AGENT_SYSTEM },
-  ];
+  const actionHistory = [];
 
   console.error(`\n[agent] Task: ${task}`);
   console.error(`[agent] Model: ${LLM_MODEL}`);
+  console.error(`[agent] Provider: ${LLM_PROVIDER} (fallbacks disabled)`);
   console.error(`[agent] Max steps: ${maxSteps}\n`);
 
-  let needsTree = true; // first iteration always sends tree
-
   for (let step = 1; step <= maxSteps; step++) {
-    // Only send a11y tree when the model needs to pick an interactive element
-    if (needsTree) {
-      const tree = refreshTree();
-      const userMsg = buildUserMessage(task, tree);
-      messages.push({ role: "user", content: userMsg });
-    }
-    needsTree = true; // default: send tree next time
+    const tree = refreshTree();
+    const userMsg = buildUserMessage(task, step, actionHistory, tree);
+    const requestMessages = [
+      { role: "system", content: AGENT_SYSTEM },
+      { role: "user", content: userMsg },
+    ];
 
     console.error(`--- Step ${step}/${maxSteps} ---`);
     console.error(`[agent] Page: ${doc.title || currentUrl}`);
     console.error(`[agent] URL: ${currentUrl}\n`);
 
-    const assistantMsg = await callLLM(messages);
-    messages.push(assistantMsg);
+    const assistantMsg = await callLLM(requestMessages);
 
     if (assistantMsg.content) {
       console.error(`[thinking] ${assistantMsg.content}`);
@@ -848,12 +992,20 @@ async function agentLoop(task) {
 
     console.error(`[action] ${fn}(${JSON.stringify(args)})`);
 
+    const targetNode =
+      fn === "click" || fn === "type" || fn === "submit"
+        ? findNode(args.id)
+        : null;
+    const targetLabel = formatTargetLabel(targetNode);
+    const beforeState = capturePageState(tree);
+
     let toolResult = "";
+    let resultSummary = "";
+    let outputText = "";
 
     try {
       if (fn === "done") {
         console.log(`\nResult: ${args.summary}`);
-        messages.push({ role: "tool", tool_call_id: tc.id, content: "Task complete." });
         return;
       } else if (fn === "click") {
         await execClick(args.id);
@@ -868,20 +1020,38 @@ async function agentLoop(task) {
         await execGoto(args.url);
         toolResult = `Navigated to ${currentUrl}. Page: "${doc.title}"`;
       } else if (fn === "content") {
-        const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
-        td.remove(["script", "style", "nav", "noscript", "svg"]);
-        const contentRoot = doc.querySelector("article") || doc.querySelector("main") || doc.querySelector("[role='main']") || doc.body;
-        const md = td.turndown(contentRoot.innerHTML);
-        toolResult = md.substring(0, 4000);
-        needsTree = false; // content was returned, no need to resend huge tree
+        const md = getContentMarkdown();
+        outputText = md.substring(0, 4000);
+        toolResult = outputText;
+        resultSummary = `returned markdown content (${outputText.length}/${md.length} chars)`;
         console.error(`[agent] Content extracted (${md.length} chars)`);
+      } else {
+        throw new Error(`Unsupported tool: ${fn}`);
       }
     } catch (err) {
       toolResult = `Error: ${err.message}`;
+      resultSummary = `error: ${err.message}`;
       console.error(`[agent] Action error: ${err.message}`);
     }
 
-    messages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
+    const afterTree = refreshTree();
+    const afterState = capturePageState(afterTree);
+    const pageChangeSummary = summarizePageChange(beforeState, afterState);
+    if (resultSummary) {
+      resultSummary = `${resultSummary}; ${pageChangeSummary}`;
+    } else {
+      resultSummary = pageChangeSummary;
+    }
+
+    actionHistory.push({
+      step,
+      tool: fn,
+      args,
+      targetLabel,
+      resultSummary,
+      outputText,
+    });
+
     console.error(`[result] ${toolResult.substring(0, 200)}\n`);
   }
 
