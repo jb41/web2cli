@@ -1,7 +1,9 @@
 .claude
+.env
 .venv
 .DS_Store
 *.egg-info/
+*.log
 __pycache__/
 dist/
 build/
