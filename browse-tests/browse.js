@@ -36,6 +36,8 @@ const flagHtml = process.argv.includes("--html");
 const flagVerbose = process.argv.includes("--verbose");
 const flagJson = process.argv.includes("--json");
 const flagInteractive = process.argv.includes("--interactive");
+const flagDebugAgent = process.argv.includes("--debug-agent");
+const flagShowCosts = process.argv.includes("--show-costs");
 const flagTask = process.argv.find((a) => a.startsWith("--task="))?.split("=").slice(1).join("=")
   || (process.argv.includes("--task") ? process.argv[process.argv.indexOf("--task") + 1] : null);
 const timeout = parseInt(
@@ -44,7 +46,7 @@ const timeout = parseInt(
 
 if (!url) {
   console.error(
-    "Usage: node browse-jsdom.js <url> [--html] [--json] [--verbose] [--interactive] [--timeout=ms]"
+    "Usage: node browse-jsdom.js <url> [--html] [--json] [--verbose] [--interactive] [--debug-agent] [--show-costs] [--timeout=ms]"
   );
   process.exit(1);
 }
@@ -818,39 +820,129 @@ function formatActionRecord(record, includeResult = true) {
   return line;
 }
 
-function buildUserMessage(task, step, history, tree) {
+function buildAgentMemory(task, step, history, tree) {
   const page = capturePageState(tree);
-  let msg = `TASK\n${task}\n\n`;
-  msg += `STEP\n${step}\n\n`;
-  msg += `CURRENT PAGE\n`;
-  msg += `Title: ${page.title}\n`;
-  msg += `URL: ${page.url}\n`;
-  msg += `Elements: ${page.elements}\n`;
-  msg += `Interactive: ${page.interactiveCount}\n\n`;
+  const memory = {
+    task,
+    step,
+    currentPage: {
+      title: page.title,
+      url: page.url,
+      elements: page.elements,
+      interactive: page.interactiveCount,
+    },
+    lastAction: null,
+    lastResult: null,
+    lastToolOutput: null,
+    recentActions: [],
+    currentA11yTree: tree.lines,
+    stats: {
+      a11yLines: tree.lines.length,
+      interactiveCount: tree.interactiveCount,
+    },
+  };
 
   if (history.length > 0) {
     const last = history[history.length - 1];
     const recent = history.slice(-ACTION_HISTORY_LIMIT);
 
-    msg += `LAST ACTION\n${formatActionRecord(last, false)}\n\n`;
-    msg += `LAST RESULT\n${last.resultSummary}\n\n`;
+    memory.lastAction = {
+      step: last.step,
+      tool: last.tool,
+      args: last.args,
+      targetLabel: last.targetLabel || null,
+    };
+    memory.lastResult = last.resultSummary;
+    memory.lastToolOutput = last.outputText || null;
+    memory.recentActions = recent.map((record) => ({
+      step: record.step,
+      tool: record.tool,
+      args: record.args,
+      targetLabel: record.targetLabel || null,
+      resultSummary: record.resultSummary,
+    }));
+  }
 
-    if (last.outputText) {
-      msg += `LAST TOOL OUTPUT\n${last.outputText}\n\n`;
+  return memory;
+}
+
+function buildUserMessage(memory) {
+  let msg = `TASK\n${memory.task}\n\n`;
+  msg += `STEP\n${memory.step}\n\n`;
+  msg += `CURRENT PAGE\n`;
+  msg += `Title: ${memory.currentPage.title}\n`;
+  msg += `URL: ${memory.currentPage.url}\n`;
+  msg += `Elements: ${memory.currentPage.elements}\n`;
+  msg += `Interactive: ${memory.currentPage.interactive}\n\n`;
+
+  if (memory.lastAction) {
+    msg += `LAST ACTION\n`;
+    msg += `${memory.lastAction.tool} ${formatActionArgs(memory.lastAction.args)}`;
+    if (memory.lastAction.targetLabel) {
+      msg += ` on ${memory.lastAction.targetLabel}`;
+    }
+    msg += `\n\n`;
+    msg += `LAST RESULT\n${memory.lastResult}\n\n`;
+
+    if (memory.lastToolOutput) {
+      msg += `LAST TOOL OUTPUT\n${memory.lastToolOutput}\n\n`;
     }
 
     msg += `RECENT ACTIONS\n`;
-    for (const record of recent) {
+    for (const record of memory.recentActions) {
       msg += `${record.step}. ${formatActionRecord(record)}\n`;
     }
     msg += `\n`;
   }
 
   msg += `CURRENT ACCESSIBILITY TREE\n`;
-  for (const line of tree.lines) {
+  for (const line of memory.currentA11yTree) {
     msg += line + "\n";
   }
   return msg;
+}
+
+function printAgentPrompt(step, messages) {
+  if (!flagDebugAgent) return;
+  const sanitizedMessages = messages.map(sanitizeMessage).filter(Boolean);
+  console.error(`\n[agent-debug] Prompt for step ${step}`);
+  console.error(JSON.stringify(sanitizedMessages, null, 2));
+  console.error();
+}
+
+function usageNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function formatCostValue(value) {
+  if (!Number.isFinite(value)) return "n/a";
+  if (value === 0) return "0";
+  return value >= 0.001
+    ? value.toFixed(6).replace(/\.?0+$/, "")
+    : value.toPrecision(6).replace(/\.?0+$/, "");
+}
+
+function summarizeUsage(usage) {
+  if (!usage || typeof usage !== "object") {
+    return "prompt=? completion=? total=? cost=n/a";
+  }
+
+  const prompt = usage.prompt_tokens ?? "?";
+  const completion = usage.completion_tokens ?? "?";
+  const total = usage.total_tokens ?? "?";
+  const cost = usage.cost;
+  const costLabel = cost === undefined ? "n/a" : `${formatCostValue(usageNumber(cost))} credits`;
+  return `prompt=${prompt} completion=${completion} total=${total} cost=${costLabel}`;
+}
+
+function accumulateUsage(total, usage) {
+  total.requests += 1;
+  if (!usage || typeof usage !== "object") return;
+  total.promptTokens += usageNumber(usage.prompt_tokens);
+  total.completionTokens += usageNumber(usage.completion_tokens);
+  total.totalTokens += usageNumber(usage.total_tokens);
+  total.cost += usageNumber(usage.cost);
 }
 
 function sanitizeToolCall(toolCall) {
@@ -903,6 +995,20 @@ function sanitizeMessage(message) {
   };
 }
 
+function buildLlmPayload(messages) {
+  return {
+    model: LLM_MODEL,
+    messages: messages.map(sanitizeMessage).filter(Boolean),
+    provider: {
+      only: [LLM_PROVIDER],
+      allow_fallbacks: false,
+    },
+    tools: AGENT_TOOLS,
+    temperature: 0,
+    max_tokens: 1024,
+  };
+}
+
 async function callLLM(messages) {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
@@ -910,23 +1016,15 @@ async function callLLM(messages) {
     throw new Error("OPENROUTER_API_KEY not set. Add it to .env file.");
   }
 
+  const payload = buildLlmPayload(messages);
+
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      messages: messages.map(sanitizeMessage).filter(Boolean),
-      provider: {
-        only: [LLM_PROVIDER],
-        allow_fallbacks: false,
-      },
-      tools: AGENT_TOOLS,
-      temperature: 0,
-      max_tokens: 1024,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (res.status === 429) {
@@ -942,117 +1040,145 @@ async function callLLM(messages) {
   }
 
   const data = await res.json();
-  return data.choices[0].message;
+  return data;
 }
 
 async function agentLoop(task) {
   const maxSteps = 15;
   const actionHistory = [];
+  const usageTotals = {
+    requests: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cost: 0,
+  };
 
   console.error(`\n[agent] Task: ${task}`);
   console.error(`[agent] Model: ${LLM_MODEL}`);
   console.error(`[agent] Provider: ${LLM_PROVIDER} (fallbacks disabled)`);
   console.error(`[agent] Max steps: ${maxSteps}\n`);
 
-  for (let step = 1; step <= maxSteps; step++) {
-    const tree = refreshTree();
-    const userMsg = buildUserMessage(task, step, actionHistory, tree);
-    const requestMessages = [
-      { role: "system", content: AGENT_SYSTEM },
-      { role: "user", content: userMsg },
-    ];
+  try {
+    for (let step = 1; step <= maxSteps; step++) {
+      const tree = refreshTree();
+      const memory = buildAgentMemory(task, step, actionHistory, tree);
+      const userMsg = buildUserMessage(memory);
+      const requestMessages = [
+        { role: "system", content: AGENT_SYSTEM },
+        { role: "user", content: userMsg },
+      ];
+      printAgentPrompt(step, requestMessages);
 
-    console.error(`--- Step ${step}/${maxSteps} ---`);
-    console.error(`[agent] Page: ${doc.title || currentUrl}`);
-    console.error(`[agent] URL: ${currentUrl}\n`);
+      console.error(`--- Step ${step}/${maxSteps} ---`);
+      console.error(`[agent] Page: ${doc.title || currentUrl}`);
+      console.error(`[agent] URL: ${currentUrl}\n`);
 
-    const assistantMsg = await callLLM(requestMessages);
-
-    if (assistantMsg.content) {
-      console.error(`[thinking] ${assistantMsg.content}`);
-    }
-
-    const toolCalls = assistantMsg.tool_calls;
-    if (!toolCalls || toolCalls.length === 0) {
-      console.error("[agent] No tool call. Response:", assistantMsg.content || "(empty)");
-      continue;
-    }
-
-    // Process the first tool call
-    const tc = toolCalls[0];
-    const fn = tc.function.name;
-    let args;
-    try {
-      args = JSON.parse(tc.function.arguments);
-    } catch {
-      // Try to fix common JSON issues from LLMs (unterminated strings, etc.)
-      console.error(`[agent] Malformed tool args: ${tc.function.arguments}`);
-      args = {};
-    }
-
-    console.error(`[action] ${fn}(${JSON.stringify(args)})`);
-
-    const targetNode =
-      fn === "click" || fn === "type" || fn === "submit"
-        ? findNode(args.id)
-        : null;
-    const targetLabel = formatTargetLabel(targetNode);
-    const beforeState = capturePageState(tree);
-
-    let toolResult = "";
-    let resultSummary = "";
-    let outputText = "";
-
-    try {
-      if (fn === "done") {
-        console.log(`\nResult: ${args.summary}`);
-        return;
-      } else if (fn === "click") {
-        await execClick(args.id);
-        toolResult = `Clicked [${args.id}]. Page: "${doc.title}", URL: ${currentUrl}`;
-      } else if (fn === "type") {
-        await execType(args.id, args.text);
-        toolResult = `Typed "${args.text}" into [${args.id}].`;
-      } else if (fn === "submit") {
-        await execSubmit(args.id);
-        toolResult = `Submitted [${args.id}]. Page: "${doc.title}", URL: ${currentUrl}`;
-      } else if (fn === "goto") {
-        await execGoto(args.url);
-        toolResult = `Navigated to ${currentUrl}. Page: "${doc.title}"`;
-      } else if (fn === "content") {
-        const md = getContentMarkdown();
-        outputText = md.substring(0, 4000);
-        toolResult = outputText;
-        resultSummary = `returned markdown content (${outputText.length}/${md.length} chars)`;
-        console.error(`[agent] Content extracted (${md.length} chars)`);
-      } else {
-        throw new Error(`Unsupported tool: ${fn}`);
+      const llmData = await callLLM(requestMessages);
+      const assistantMsg = llmData.choices?.[0]?.message;
+      if (!assistantMsg) {
+        throw new Error("OpenRouter response missing choices[0].message");
       }
-    } catch (err) {
-      toolResult = `Error: ${err.message}`;
-      resultSummary = `error: ${err.message}`;
-      console.error(`[agent] Action error: ${err.message}`);
+
+      accumulateUsage(usageTotals, llmData.usage);
+      if (flagShowCosts) {
+        console.error(`[cost] Step ${step}: ${summarizeUsage(llmData.usage)}`);
+      }
+
+      if (assistantMsg.content) {
+        console.error(`[thinking] ${assistantMsg.content}`);
+      }
+
+      const toolCalls = assistantMsg.tool_calls;
+      if (!toolCalls || toolCalls.length === 0) {
+        console.error("[agent] No tool call. Response:", assistantMsg.content || "(empty)");
+        continue;
+      }
+
+      // Process the first tool call
+      const tc = toolCalls[0];
+      const fn = tc.function.name;
+      let args;
+      try {
+        args = JSON.parse(tc.function.arguments);
+      } catch {
+        // Try to fix common JSON issues from LLMs (unterminated strings, etc.)
+        console.error(`[agent] Malformed tool args: ${tc.function.arguments}`);
+        args = {};
+      }
+
+      console.error(`[action] ${fn}(${JSON.stringify(args)})`);
+
+      const targetNode =
+        fn === "click" || fn === "type" || fn === "submit"
+          ? findNode(args.id)
+          : null;
+      const targetLabel = formatTargetLabel(targetNode);
+      const beforeState = capturePageState(tree);
+
+      let toolResult = "";
+      let resultSummary = "";
+      let outputText = "";
+
+      try {
+        if (fn === "done") {
+          console.log(`\nResult: ${args.summary}`);
+          return;
+        } else if (fn === "click") {
+          await execClick(args.id);
+          toolResult = `Clicked [${args.id}]. Page: "${doc.title}", URL: ${currentUrl}`;
+        } else if (fn === "type") {
+          await execType(args.id, args.text);
+          toolResult = `Typed "${args.text}" into [${args.id}].`;
+        } else if (fn === "submit") {
+          await execSubmit(args.id);
+          toolResult = `Submitted [${args.id}]. Page: "${doc.title}", URL: ${currentUrl}`;
+        } else if (fn === "goto") {
+          await execGoto(args.url);
+          toolResult = `Navigated to ${currentUrl}. Page: "${doc.title}"`;
+        } else if (fn === "content") {
+          const md = getContentMarkdown();
+          outputText = md.substring(0, 4000);
+          toolResult = outputText;
+          resultSummary = `returned markdown content (${outputText.length}/${md.length} chars)`;
+          console.error(`[agent] Content extracted (${md.length} chars)`);
+        } else {
+          throw new Error(`Unsupported tool: ${fn}`);
+        }
+      } catch (err) {
+        toolResult = `Error: ${err.message}`;
+        resultSummary = `error: ${err.message}`;
+        console.error(`[agent] Action error: ${err.message}`);
+      }
+
+      const afterTree = refreshTree();
+      const afterState = capturePageState(afterTree);
+      const pageChangeSummary = summarizePageChange(beforeState, afterState);
+      if (resultSummary) {
+        resultSummary = `${resultSummary}; ${pageChangeSummary}`;
+      } else {
+        resultSummary = pageChangeSummary;
+      }
+
+      actionHistory.push({
+        step,
+        tool: fn,
+        args,
+        targetLabel,
+        resultSummary,
+        outputText,
+      });
+
+      console.error(`[result] ${toolResult.substring(0, 200)}\n`);
     }
-
-    const afterTree = refreshTree();
-    const afterState = capturePageState(afterTree);
-    const pageChangeSummary = summarizePageChange(beforeState, afterState);
-    if (resultSummary) {
-      resultSummary = `${resultSummary}; ${pageChangeSummary}`;
-    } else {
-      resultSummary = pageChangeSummary;
+  } finally {
+    if (flagShowCosts) {
+      console.error(
+        `[cost] Total: requests=${usageTotals.requests} prompt=${usageTotals.promptTokens} `
+        + `completion=${usageTotals.completionTokens} total=${usageTotals.totalTokens} `
+        + `cost=${formatCostValue(usageTotals.cost)} credits`
+      );
     }
-
-    actionHistory.push({
-      step,
-      tool: fn,
-      args,
-      targetLabel,
-      resultSummary,
-      outputText,
-    });
-
-    console.error(`[result] ${toolResult.substring(0, 200)}\n`);
   }
 
   console.error("[agent] Max steps reached. Stopping.");
