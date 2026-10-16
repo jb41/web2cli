@@ -130,7 +130,7 @@ def _read_cache() -> dict[str, str] | None:
 
 
 def _fetch_query_ids() -> dict[str, str]:
-    resp = httpx.get("https://x.com", headers={"User-Agent": UA}, follow_redirects=True)
+    resp = httpx.get("https://x.com", headers={"User-Agent": UA}, follow_redirects=True, timeout=15.0)
     match = re.search(
         r'https://abs\.twimg\.com/responsive-web/client-web/main\.[a-f0-9]+\.js',
         resp.text,
@@ -139,7 +139,7 @@ def _fetch_query_ids() -> dict[str, str]:
         raise ValueError("Could not find X main JS bundle URL")
 
     bundle_url = match.group(0)
-    bundle = httpx.get(bundle_url, headers={"User-Agent": UA})
+    bundle = httpx.get(bundle_url, headers={"User-Agent": UA}, timeout=15.0)
     pairs = re.findall(r'queryId:"([^"]+)",operationName:"([^"]+)"', bundle.text)
     if not pairs:
         raise ValueError("Could not extract X query IDs")
@@ -168,10 +168,10 @@ def _init_transaction_client() -> ClientTransaction:
         return _ct
 
     headers = {"User-Agent": UA}
-    home_resp = httpx.get("https://x.com", headers=headers, follow_redirects=True)
+    home_resp = httpx.get("https://x.com", headers=headers, follow_redirects=True, timeout=15.0)
     home_soup = BeautifulSoup(home_resp.text, "html.parser")
     ondemand_url = get_ondemand_file_url(response=home_soup)
-    ondemand_resp = httpx.get(ondemand_url, headers=headers)
+    ondemand_resp = httpx.get(ondemand_url, headers=headers, timeout=15.0)
 
     _ct = ClientTransaction(
         home_page_response=home_soup,

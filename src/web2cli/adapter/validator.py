@@ -121,7 +121,20 @@ def validate_adapter(spec: AdapterSpec, adapter_dir: Path) -> None:
                     raise AdapterValidationError(
                         f"Command '{cmd_name}': parse step {idx} custom parser missing script"
                     )
-                if not (adapter_dir / script).is_file():
+                if Path(script).is_absolute():
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': parse step {idx} custom parser script path cannot be absolute: {script}"
+                    )
+                resolved_adapter_dir = adapter_dir.resolve()
+                full_script_path = (adapter_dir / script).resolve()
+                try:
+                    full_script_path.relative_to(resolved_adapter_dir)
+                except ValueError:
+                    raise AdapterValidationError(
+                        f"Command '{cmd_name}': parse step {idx} custom parser script escapes adapter directory: {script}"
+                    )
+                if not full_script_path.is_file():
                     raise AdapterValidationError(
                         f"Command '{cmd_name}': parse step {idx} parser script not found: {script}"
                     )
+

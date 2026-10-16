@@ -99,10 +99,12 @@ def _format_markdown(records: list[dict], fields: list[str]) -> str:
         for field in fields:
             val = record.get(field)
             cell = str(val) if val is not None else ""
+            cell = cell.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
             cell = cell.replace("|", "\\|")
             cells.append(cell)
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
 
 
 def _format_plain(records: list[dict], fields: list[str]) -> str:

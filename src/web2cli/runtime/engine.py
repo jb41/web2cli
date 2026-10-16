@@ -314,7 +314,13 @@ def _fetch_resource_records(
 
     records: list[dict[str, Any]] = []
     page = 0
-    while True:
+    max_pages_raw = paginate.get("max_pages", 100)
+    try:
+        max_pages = int(max_pages_raw)
+    except (TypeError, ValueError):
+        max_pages = 100
+
+    while page < max_pages:
         page += 1
         current_spec = request_spec
         if cursor and cursor_param:
@@ -350,6 +356,10 @@ def _fetch_resource_records(
             break
         seen_cursors.add(next_cursor)
         cursor = next_cursor
+
+    if page >= max_pages and trace:
+        trace(f"resource={resource_name} stopped at max_pages={max_pages}")
+
 
     save_cache(adapter.meta.domain, cache_key, records)
     if trace:

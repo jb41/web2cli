@@ -8,17 +8,30 @@ import time
 from pathlib import Path
 from typing import Any
 
-BASE_CACHE_DIR = Path.home() / ".web2cli" / "cache"
+from web2cli.auth.store import sanitize_domain
+
+import os
+
+BASE_CACHE_DIR = Path(os.environ.get("WEB2CLI_CACHE_DIR", Path.home() / ".web2cli" / "cache"))
+
 
 
 def _cache_path(domain: str, key: str) -> Path:
+    clean_domain = sanitize_domain(domain)
     digest = hashlib.sha1(key.encode()).hexdigest()  # nosec: non-crypto use
-    return BASE_CACHE_DIR / domain / "runtime" / f"{digest}.json"
+    path = BASE_CACHE_DIR / clean_domain / "runtime" / f"{digest}.json"
+    if not path.resolve().is_relative_to(BASE_CACHE_DIR.resolve()):
+        raise ValueError(f"Cache path traversal detected for domain {domain!r}")
+    return path
 
 
 def load_cache(domain: str, key: str, ttl: int | None = None) -> Any | None:
     """Load cached payload if present and not expired."""
-    path = _cache_path(domain, key)
+    try:
+        path = _cache_path(domain, key)
+    except ValueError:
+        return None
+
     if not path.is_file():
         return None
     try:
@@ -36,7 +49,12 @@ def load_cache(domain: str, key: str, ttl: int | None = None) -> Any | None:
 
 def save_cache(domain: str, key: str, payload: Any) -> None:
     """Persist payload in cache."""
-    path = _cache_path(domain, key)
+    try:
+        path = _cache_path(domain, key)
+    except ValueError:
+        return
+
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = {"ts": time.time(), "payload": payload}
     path.write_text(json.dumps(doc))
+
